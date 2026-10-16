@@ -256,7 +256,11 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
             for (address in ordered) {
                 val record = _devices.value[address] ?: continue
                 if (record.link == LinkState.CONNECTED) continue
-                if (!connect(address)) continue
+                if (!connect(address)) {
+                    // The phone refuses app-initiated connections: one message is enough.
+                    if (!HiddenBluetooth.canConnect) break
+                    continue
+                }
                 // Give the stack time; connections are serialized internally anyway.
                 val deadline = SystemClock.elapsedRealtime() + 8_000
                 while (SystemClock.elapsedRealtime() < deadline &&

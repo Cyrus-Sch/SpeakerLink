@@ -210,10 +210,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Connects every speaker in the party selection; the preferred host ends up playing. */
     fun connectAll() {
         val current = state.value
-        val targets = current.partySpeakers.filter { !it.connected }.map { it.address }
-        val playOn = current.preferredHost?.takeIf { host -> current.partySpeakers.any { it.address == host } }
-            ?: current.plan.best?.host?.key
-        bluetooth.connectAll(targets, playOn)
+        // Speakers that are around first, so absent ones do not take the connection slots.
+        val targets = current.partySpeakers.filter { !it.connected }.sortedByDescending { it.nearby }.map { it.address }
+        // The planner already picked the host (the user's choice only if that speaker is around).
+        bluetooth.connectAll(targets, playOn = current.plan.best?.host?.key)
     }
 
     /** Connects the phone to a group's host and makes it the playing speaker. */
