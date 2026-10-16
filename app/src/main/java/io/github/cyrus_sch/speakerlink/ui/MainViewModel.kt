@@ -212,8 +212,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = state.value
         // Speakers that are around first, so absent ones do not take the connection slots.
         val targets = current.partySpeakers.filter { !it.connected }.sortedByDescending { it.nearby }.map { it.address }
-        // The planner already picked the host (the user's choice only if that speaker is around).
-        bluetooth.connectAll(targets, playOn = current.plan.best?.host?.key)
+        // The planner already picked the hosts (the user's choice only if that speaker is around).
+        // Play on the host of the user's group if there is one, else on the largest group's host.
+        val preferredGroup = current.plan.groups.firstOrNull { group -> group.speakers.any { it.key == current.preferredHost } }
+        bluetooth.connectAll(targets, playOn = (preferredGroup ?: current.plan.best)?.host?.key)
     }
 
     /** Connects the phone to a group's host and makes it the playing speaker. */
@@ -239,19 +241,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun playLocateSound(address: String) {
         viewModelScope.launch {
             val record = withFreshLeAddresses(listOf(address)).firstOrNull() ?: return@launch
-            statusReader.playLocateSound(address, gattTargets(record))
+            statusReader.playLocateSound(address, gattTargets(record), expectedNames(record))
         }
     }
 
     private fun readStatuses(addresses: List<String>) {
         val wanted = addresses.filter { statusReader.markReading(it) }
         if (wanted.isEmpty()) return
-        viewModelScope.launch {
-            for (record in withFreshLeAddresses(wanted)) {
-                statusReader.read(record.address, gattTargets(record), expectedName = record.name)
+        // The app's scope, and every mark undone if no read starts, so no speaker stays "Reading".
+        container.scope.launch {
+            val pending = wanted.toMutableSet()
+            try {
+                for (record in withFreshLeAddresses(wanted)) {
+                    statusReader.read(record.address, gattTargets(record), expectedNames(record))
+                    pending -= record.address
+                }
+            } finally {
+                pending.forEach(statusReader::cancelReading)
             }
         }
     }
+
+    /** The speaker's own name and the name the user gave it on the phone. */
+    private fun expectedNames(record: DeviceRecord): List<String> = listOfNotNull(record.remoteName, record.name).distinct()
 
     /**
      * The control service of most models is reached through the speaker's current LE address,
@@ -275,14 +287,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Ways to reach the speaker's control service, best first. Models that run it over the classic
-     * link start there; the others start with the LE address they advertise from.
+     * link start there; the others start with the LE address they advertise from. That address is
+     * checked against the speaker's name unless the advertisement named the speaker's address.
      */
     private fun gattTargets(record: DeviceRecord): List<GattTarget> {
         val model = identify(record, prefs.state.value).model
         val le = GattTarget(record.address, BluetoothDevice.TRANSPORT_LE)
         val classic = GattTarget(record.address, BluetoothDevice.TRANSPORT_BREDR)
         val fresh = record.bleAddress?.takeIf { record.hasFreshLeAddress() && it != record.address }
-            ?.let { GattTarget(it, BluetoothDevice.TRANSPORT_LE, randomAddress = true) }
+            ?.let { GattTarget(it, BluetoothDevice.TRANSPORT_LE, randomAddress = true, verifyName = !record.bleMatchExact) }
         return if (model?.control == ControlProtocol.AA_BR_EDR) {
             listOfNotNull(classic, fresh, le)
         } else {

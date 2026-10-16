@@ -163,14 +163,14 @@ object PartyPlanner {
                 excluded += members.map { ExcludedSpeaker(it, reason, family) }
                 continue
             }
-            val ordered = orderForHost(members, preferredHostKey)
-            // Families with a size limit (two speakers) can still form several separate groups.
-            val chunks = ordered.chunked(family.maxSpeakers ?: ordered.size)
-            for (chunk in chunks) {
+            // Families with a size limit (two speakers) can still form several separate groups. The
+            // split uses a stable order, so pairs do not change when another speaker starts playing.
+            val stable = members.sortedWith(compareByDescending<PlannerSpeaker> { it.present }.thenBy { it.key })
+            for (chunk in stable.chunked(family.maxSpeakers ?: stable.size)) {
                 if (chunk.size < 2) {
                     excluded += chunk.map { ExcludedSpeaker(it, ExclusionReason.GROUP_FULL, family) }
                 } else {
-                    groups += buildGroup(family, key.subgroup, chunk)
+                    groups += buildGroup(family, key.subgroup, orderForHost(chunk, preferredHostKey))
                 }
             }
         }
@@ -190,26 +190,32 @@ object PartyPlanner {
 
     /**
      * Gives each speaker one family. Speakers with a single family keep it. Speakers with several
-     * (Xtreme 4, Charge 3, PartyBox Club 120 / Stage 320) join a family that still has room, then
-     * the one with the most speakers, then the newest.
+     * (Xtreme 4, Charge 3, PartyBox Club 120 / Stage 320) prefer a family where they complete or
+     * join a group (speakers they can actually link with, and room left), then the one with the
+     * most such speakers, then the newest.
      */
     private fun assignFamilies(linkable: List<PlannerSpeaker>): Map<String, LinkFamily> {
         val result = LinkedHashMap<String, LinkFamily>()
-        val counts = HashMap<LinkFamily, Int>()
-        val (single, multi) = linkable.partition { it.model!!.families.size == 1 }
-        for (speaker in single) {
-            val family = speaker.model!!.families.single()
+        val counts = HashMap<BucketKey, Int>()
+        fun assign(speaker: PlannerSpeaker, family: LinkFamily) {
             result[speaker.key] = family
-            counts[family] = (counts[family] ?: 0) + 1
+            val key = bucketKey(speaker, family)
+            counts[key] = (counts[key] ?: 0) + 1
         }
+        val (single, multi) = linkable.partition { it.model!!.families.size == 1 }
+        for (speaker in single) assign(speaker, speaker.model!!.families.single())
         for (speaker in multi) {
+            fun count(family: LinkFamily) = counts[bucketKey(speaker, family)] ?: 0
             val family = speaker.model!!.families.maxWith(
-                compareBy<LinkFamily> { f -> f.maxSpeakers == null || (counts[f] ?: 0) < f.maxSpeakers }
-                    .thenBy { counts[it] ?: 0 }
+                compareBy<LinkFamily> { f ->
+                    val max = f.maxSpeakers
+                    // Unlimited: anyone to link with. Limited: a group that is waiting for a partner.
+                    if (max == null) count(f) >= 1 else count(f) % max != 0
+                }
+                    .thenBy { count(it) }
                     .thenBy { it.generation },
             )
-            result[speaker.key] = family
-            counts[family] = (counts[family] ?: 0) + 1
+            assign(speaker, family)
         }
         return result
     }
@@ -233,13 +239,14 @@ object PartyPlanner {
 
     /**
      * Host first: the user's choice (if that speaker is around), then the speaker playing, then
-     * one already connected, then one that is around.
+     * one already connected, then one that is around, then the user's choice anyway.
      */
     private fun orderForHost(members: List<PlannerSpeaker>, preferredHostKey: String?): List<PlannerSpeaker> {
         val host = members.firstOrNull { it.key == preferredHostKey && (it.present || it.connectedToPhone) }
             ?: members.firstOrNull { it.playing }
             ?: members.firstOrNull { it.connectedToPhone }
             ?: members.firstOrNull { it.present }
+            ?: members.firstOrNull { it.key == preferredHostKey }
             ?: members.first()
         return listOf(host) + members.filter { it.key != host.key }
     }

@@ -37,7 +37,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /** Result of asking a speaker for its status over its vendor control service. */
 sealed interface SpeakerStatus {
-    data object Reading : SpeakerStatus
+    /** A read is running; [previous] is the last good reading, shown meanwhile. */
+    data class Reading(val previous: Ready? = null) : SpeakerStatus
 
     data class Ready(val info: SpeakerInfo, val readAt: Long) : SpeakerStatus
 
@@ -62,8 +63,15 @@ sealed interface SpeakerStatus {
  * One way to reach a speaker's control service.
  *
  * @property randomAddress the address is a (rotating) random LE address, not the public one.
+ * @property verifyName the address was matched to the speaker by a heuristic, so a reply that
+ *   names another speaker is ignored.
  */
-data class GattTarget(val address: String, val transport: Int, val randomAddress: Boolean = false)
+data class GattTarget(
+    val address: String,
+    val transport: Int,
+    val randomAddress: Boolean = false,
+    val verifyName: Boolean = false,
+)
 
 /**
  * Talks to the JBL control service (see [JblProtocol]) to read battery, name and firmware, or to
@@ -78,34 +86,57 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
     private val _statuses = MutableStateFlow<Map<String, SpeakerStatus>>(emptyMap())
     val statuses: StateFlow<Map<String, SpeakerStatus>> = _statuses.asStateFlow()
 
-    /** Marks [key] as being read, so the UI shows progress while the caller prepares targets. */
+    /**
+     * Marks [key] as being read, so the UI shows progress while the caller prepares targets.
+     * Returns false if a read is already running. Every successful call must be followed by
+     * [read] or [cancelReading].
+     */
     fun markReading(key: String): Boolean {
-        if (_statuses.value[key] == SpeakerStatus.Reading) return false
-        _statuses.update { it + (key to SpeakerStatus.Reading) }
-        return true
+        var marked = false
+        _statuses.update { current ->
+            val status = current[key]
+            marked = status !is SpeakerStatus.Reading
+            if (marked) current + (key to SpeakerStatus.Reading(status as? SpeakerStatus.Ready)) else current
+        }
+        return marked
+    }
+
+    /** Undoes [markReading] when the read cannot start after all. */
+    fun cancelReading(key: String) {
+        _statuses.update { current ->
+            val status = current[key] as? SpeakerStatus.Reading ?: return@update current
+            if (status.previous != null) current + (key to status.previous) else current - key
+        }
     }
 
     /**
-     * Reads the status of the speaker identified by [key], trying [targets] in order. A reply that
-     * names a different speaker than [expectedName] is ignored, because LE addresses are matched
-     * to paired speakers partly by heuristics.
+     * Reads the status of the speaker identified by [key], trying [targets] in order. On targets
+     * with [GattTarget.verifyName], a reply whose name matches none of [expectedNames] is ignored.
      */
-    fun read(key: String, targets: List<GattTarget>, expectedName: String?) {
-        _statuses.update { it + (key to SpeakerStatus.Reading) }
+    fun read(key: String, targets: List<GattTarget>, expectedNames: List<String>) {
+        _statuses.update { current ->
+            val status = current[key]
+            if (status is SpeakerStatus.Reading) current
+            else current + (key to SpeakerStatus.Reading(status as? SpeakerStatus.Ready))
+        }
         scope.launch {
             val status = mutex.withLock {
                 execute(
                     targets,
                     listOf(JblProtocol.requestSpeakerInfo(), JblProtocol.requestFirmware()),
                     INFO_COLLECT_MILLIS,
-                    expectedName,
+                    expectedNames,
                     expectInfo = true,
                 )
             }
             _statuses.update { current ->
                 // A failed refresh keeps showing the last good reading.
-                val previous = current[key]
-                if (status is SpeakerStatus.Failed && previous is SpeakerStatus.Ready && previous.info.batteryPercent != null) {
+                val previous = when (val old = current[key]) {
+                    is SpeakerStatus.Reading -> old.previous
+                    is SpeakerStatus.Ready -> old
+                    else -> null
+                }
+                if (status is SpeakerStatus.Failed && previous != null && previous.info.batteryPercent != null) {
                     current + (key to previous)
                 } else {
                     current + (key to status)
@@ -114,14 +145,18 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         }
     }
 
-    /** Plays the speaker's "find me" sound. Only failures are reported through [statuses]. */
-    fun playLocateSound(key: String, targets: List<GattTarget>) {
+    /**
+     * Plays the speaker's "find me" sound. Only failures are reported through [statuses], and
+     * never over a read that is still running. [expectedNames] works as in [read].
+     */
+    fun playLocateSound(key: String, targets: List<GattTarget>, expectedNames: List<String>) {
         scope.launch {
             val status = mutex.withLock {
-                execute(targets, listOf(JblProtocol.playSound()), 400, expectedName = null, expectInfo = false)
+                execute(targets, listOf(JblProtocol.playSound()), 400, expectedNames, expectInfo = false)
             }
-            if (status is SpeakerStatus.Failed) _statuses.update { it + (key to status) }
-            else if (_statuses.value[key] == SpeakerStatus.Reading) _statuses.update { it - key }
+            if (status is SpeakerStatus.Failed) {
+                _statuses.update { current -> if (current[key] is SpeakerStatus.Reading) current else current + (key to status) }
+            }
         }
     }
 
@@ -129,7 +164,7 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         targets: List<GattTarget>,
         commands: List<ByteArray>,
         collectMillis: Long,
-        expectedName: String?,
+        expectedNames: List<String>,
         expectInfo: Boolean,
     ): SpeakerStatus {
         if (!BtPermissions.canConnect(context)) return SpeakerStatus.Failed(SpeakerStatus.Reason.NO_PERMISSION)
@@ -144,8 +179,8 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
                 when (val outcome = session(target, commands, collectMillis, expectInfo)) {
                     is Outcome.Success -> {
                         val name = outcome.info.name
-                        if (expectedName != null && name != null && !SpeakerIdentifier.sameSpeakerName(expectedName, name)) {
-                            Log.i(TAG, "Ignoring reply from \"$name\" while looking for \"$expectedName\"")
+                        if (target.verifyName && name != null && expectedNames.none { SpeakerIdentifier.sameSpeakerName(it, name) }) {
+                            Log.i(TAG, "Ignoring reply from \"$name\" while looking for $expectedNames")
                             break // someone else's speaker: try the next target
                         }
                         return SpeakerStatus.Ready(outcome.info, SystemClock.elapsedRealtime())
@@ -241,6 +276,8 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         var info = SpeakerInfo()
         var framesSeen = 0
         var unsupported = false
+        // The speaker received at least one command (write confirmed, or accepted without response).
+        var delivered = false
         fun consume(event: Event) {
             if (event !is Event.Notification) return
             for (frame in decoder.feed(event.value)) {
@@ -313,7 +350,7 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
                 }
                 if (!sent) continue
                 written++
-                if (withResponse) await(1_500) { it is Event.CharacteristicWritten }
+                if (!withResponse || await(1_500) { it is Event.CharacteristicWritten } != null) delivered = true
                 // Collect the answers; stop early once the speaker goes quiet.
                 val deadline = SystemClock.elapsedRealtime() + collectMillis
                 var quietUntil = deadline
@@ -337,7 +374,12 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
                 else -> Outcome.NoResponse
             }
         } catch (e: Disconnected) {
-            return if (framesSeen > 0 && !info.isEmpty) Outcome.Success(info) else Outcome.FastFailure
+            return when {
+                // Some speakers drop the link right after the locate sound; it was played.
+                !expectInfo && delivered -> Outcome.Success(info)
+                framesSeen > 0 && !info.isEmpty -> Outcome.Success(info)
+                else -> Outcome.FastFailure
+            }
         } catch (e: SecurityException) {
             Log.w(TAG, "Permission lost during GATT session", e)
             return Outcome.FastFailure

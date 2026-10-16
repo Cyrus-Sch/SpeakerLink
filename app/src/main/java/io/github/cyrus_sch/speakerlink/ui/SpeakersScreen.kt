@@ -402,11 +402,13 @@ private fun stateLine(speaker: SpeakerUi): String {
 
 @Composable
 private fun StatusLine(status: SpeakerStatus) {
-    val text = when (status) {
-        SpeakerStatus.Reading -> stringResource(R.string.status_reading)
-        is SpeakerStatus.Failed -> stringResource(status.reason.textRes())
+    // While a refresh runs, the last good reading stays visible.
+    val shown = (status as? SpeakerStatus.Reading)?.previous ?: status
+    val text = when (shown) {
+        is SpeakerStatus.Reading -> stringResource(R.string.status_reading)
+        is SpeakerStatus.Failed -> stringResource(shown.reason.textRes())
         is SpeakerStatus.Ready -> buildList {
-            val info = status.info
+            val info = shown.info
             info.batteryPercent?.let {
                 add(
                     if (info.charging == true) stringResource(R.string.battery_charging, it)
@@ -419,16 +421,17 @@ private fun StatusLine(status: SpeakerStatus) {
                 AudioChannel.STEREO, null -> Unit
             }
             info.firmware?.let { add(stringResource(R.string.status_firmware, it)) }
-            if (isEmpty()) add(stringResource(R.string.status_no_details))
+            if (status is SpeakerStatus.Reading) add(stringResource(R.string.status_reading))
+            else if (isEmpty()) add(stringResource(R.string.status_no_details))
         }.joinToString(" · ")
     }
     if (text.isNotEmpty()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
             val icon = when {
-                status is SpeakerStatus.Ready && status.info.charging == true -> R.drawable.ic_battery_charging_full
-                status is SpeakerStatus.Ready -> batteryIcon(status.info.batteryPercent)
-                status is SpeakerStatus.Failed -> R.drawable.ic_warning
-                else -> R.drawable.ic_refresh
+                status is SpeakerStatus.Reading -> R.drawable.ic_refresh
+                shown is SpeakerStatus.Ready && shown.info.charging == true -> R.drawable.ic_battery_charging_full
+                shown is SpeakerStatus.Ready -> batteryIcon(shown.info.batteryPercent)
+                else -> R.drawable.ic_warning
             }
             AppIcon(icon, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(4.dp))

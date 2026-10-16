@@ -138,6 +138,47 @@ class PartyPlannerTest {
     }
 
     @Test
+    fun rememberedHostIsUsedWhenNoSpeakerIsAround() {
+        val first = speaker("flip6").copy(present = false)
+        val second = speaker("flip6").copy(present = false)
+        val plan = PartyPlanner.plan(listOf(first, second), preferredHostKey = second.key)
+        assertEquals(second, plan.best!!.host)
+    }
+
+    @Test
+    fun multiFamilyPartyBoxCompletesAWaitingPair() {
+        val onTheGo = speaker("partyboxonthego")
+        val box110 = speaker("partybox110")
+        val club120 = speaker("partyboxclub120")
+        val plan = PartyPlanner.plan(listOf(onTheGo, box110, club120))
+        val group = plan.groups.single()
+        assertEquals(LinkFamily.PARTYBOX_TWS, group.family)
+        assertEquals(setOf(box110, club120), group.speakers.toSet())
+        assertEquals(onTheGo, plan.excluded.single().speaker)
+        assertEquals(ExclusionReason.INCOMPATIBLE_MODEL, plan.excluded.single().reason)
+    }
+
+    @Test
+    fun multiFamilyPartyBoxMakesTheSecondPair() {
+        val plan = PartyPlanner.plan(List(3) { speaker("partybox110") } + speaker("partyboxclub120"))
+        assertEquals(listOf(LinkFamily.PARTYBOX_TWS, LinkFamily.PARTYBOX_TWS), plan.groups.map { it.family })
+        assertEquals(listOf(2, 2), plan.groups.map { it.size })
+        assertTrue(plan.excluded.isEmpty())
+    }
+
+    @Test
+    fun pairsStayTheSameWhenAnotherSpeakerPlays() {
+        val boxes = List(4) { speaker("partybox310") }
+        fun pairs(plan: PartyPlan) = plan.groups.map { group -> group.speakers.map { it.key }.toSet() }.toSet()
+        val idle = PartyPlanner.plan(boxes)
+        val playing = boxes.mapIndexed { i, box -> if (i == 2) box.copy(playing = true, connectedToPhone = true) else box }
+        val busy = PartyPlanner.plan(playing)
+        assertEquals(setOf(setOf(boxes[0].key, boxes[1].key), setOf(boxes[2].key, boxes[3].key)), pairs(idle))
+        assertEquals(pairs(idle), pairs(busy))
+        assertEquals(boxes[2].key, busy.groups.single { g -> g.speakers.any { it.key == boxes[2].key } }.host.key)
+    }
+
+    @Test
     fun legacyConnectIsLimitedToTwoSpeakers() {
         val plan = PartyPlanner.plan(listOf(speaker("flip3"), speaker("flip3"), speaker("pulse2")))
         assertEquals(2, plan.best!!.size)

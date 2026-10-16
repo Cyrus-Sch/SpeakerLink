@@ -234,23 +234,28 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
     }
 
     /**
-     * Connects several speakers one after another. The phone plays on the most recently connected
-     * speaker, so [playOn] is connected last and then made the active output explicitly.
+     * Connects several speakers one after another, in the given order (best first). The phone
+     * plays on the most recently connected speaker, so [playOn] is connected last and then made
+     * the active output explicitly.
      */
     fun connectAll(addresses: List<String>, playOn: String?) {
-        var ordered = addresses.distinct().filter { _devices.value[it]?.link != LinkState.CONNECTED }.sortedBy { it == playOn }
+        val pending = addresses.distinct().filter { _devices.value[it]?.link != LinkState.CONNECTED }
+        val host = playOn?.takeIf { it in pending }
+        var others = pending.filter { it != host }
         val limit = effectiveMaxConnected()
         if (limit != null) {
-            val room = (limit - connectedCount()).coerceAtLeast(if (playOn != null) 1 else 0)
-            if (ordered.size > room) {
-                // Keep the speaker that should play (it is last) and as many others as fit.
-                ordered = ordered.takeLast(room)
-                val skipped = addresses.firstOrNull { it !in ordered && _devices.value[it]?.link != LinkState.CONNECTED }
-                if (skipped != null) {
+            val reserved = if (host != null) 1 else 0
+            val room = (limit - connectedCount()).coerceAtLeast(reserved)
+            if (others.size + reserved > room) {
+                // Keep the speaker that should play and as many of the first others as fit.
+                val kept = others.take(room - reserved)
+                others.firstOrNull { it !in kept }?.let { skipped ->
                     _events.tryEmit(BluetoothEvent.ConnectFailed(skipped, displayName(skipped), limitReached = true))
                 }
+                others = kept
             }
         }
+        val ordered = others + listOfNotNull(host)
         groupJob?.cancel()
         groupJob = scope.launch {
             for (address in ordered) {
@@ -495,11 +500,13 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
                 _adapterState.value = readAdapterState()
                 if (_adapterState.value == AdapterState.ON) {
                     refresh()
+                    // A status read that started before Bluetooth went off is still waiting.
+                    if (advertLookups > 0) bleScanner.start()
                 } else {
                     scanJob?.cancel()
                     groupJob?.cancel()
                     userScanActive = false
-                    advertLookups = 0
+                    // advertLookups stays: every running lookup still calls endAdvertLookup.
                     bleScanner.reset()
                     _discovering.value = false
                     _activeAddress.value = null
