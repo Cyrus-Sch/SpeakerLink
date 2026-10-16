@@ -21,6 +21,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import io.github.cyrus_sch.speakerlink.R
@@ -46,17 +47,18 @@ fun AppRoot(
     var tab by rememberSaveable { mutableStateOf(Tab.SPEAKERS) }
     val snackbars = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val resources = LocalResources.current
 
     LaunchedEffect(events) {
         events.collect { event ->
             val message = event.message()
             val text = if (message.argument != null) {
-                context.getString(message.text, message.argument)
+                resources.getString(message.text, message.argument)
             } else {
-                context.getString(message.text)
+                resources.getString(message.text)
             }
             val actionLabel = message.action?.let {
-                context.getString(if (it == EventAction.OUTPUT_SWITCHER) R.string.action_open else R.string.action_settings)
+                resources.getString(if (it == EventAction.OUTPUT_SWITCHER) R.string.action_open else R.string.action_settings)
             }
             val result = snackbars.showSnackbar(
                 message = text,
