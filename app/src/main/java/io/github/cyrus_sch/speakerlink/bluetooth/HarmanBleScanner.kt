@@ -45,6 +45,11 @@ class HarmanBleScanner(
         runCatching { adapter?.bluetoothLeScanner?.stopScan(callback) }
     }
 
+    /** Forgets the scan without calling the stack, e.g. after Bluetooth was turned off. */
+    fun reset() {
+        scanning = false
+    }
+
     private val callback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) = handle(result)
 

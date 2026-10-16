@@ -25,6 +25,7 @@ import io.github.cyrus_sch.speakerlink.data.Preferences
 import io.github.cyrus_sch.speakerlink.status.GattTarget
 import io.github.cyrus_sch.speakerlink.status.SpeakerStatus
 import io.github.cyrus_sch.speakerlink.system.DeviceCapabilities
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -136,11 +138,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val state: StateFlow<UiState> = combine(bluetoothSnapshot, environment, capabilities, maxConnected) { bt, env, caps, max ->
         build(bt, env, caps, max)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState(capabilities = capabilities.value))
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), initialState())
 
     init {
         bluetooth.start()
+        // Capabilities and limits can only be read while Bluetooth is on (e.g. turned on from Quick Settings).
+        viewModelScope.launch {
+            bluetooth.adapterState.collect { adapter ->
+                if (adapter == AdapterState.ON) {
+                    capabilities.value = DeviceCapabilities.read(getApplication<Application>())
+                    maxConnected.value = bluetooth.maxConnectedAudioDevices()
+                }
+            }
+        }
     }
+
+    /** The first frame already shows real data instead of flashing the permission card. */
+    private fun initialState(): UiState = build(
+        BluetoothSnapshot(
+            bluetooth.adapterState.value,
+            bluetooth.devices.value,
+            bluetooth.discovering.value,
+            bluetooth.activeAddress.value,
+            bluetooth.nearbyAdverts.value,
+        ),
+        Environment(
+            container.audioOutputs.outputs.value,
+            prefs.state.value,
+            statusReader.statuses.value,
+            permissions.value,
+            SystemClock.elapsedRealtime(),
+        ),
+        capabilities.value,
+        maxConnected.value,
+    )
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -149,6 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         permissions.value = BtPermissions.allGranted(app)
         capabilities.value = DeviceCapabilities.read(app)
         bluetooth.start()
+        container.audioOutputs.refresh()
         maxConnected.value = bluetooth.maxConnectedAudioDevices()
     }
 
@@ -198,39 +231,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun playTestSound() = container.tonePlayer.play()
 
-    fun readStatus(address: String) = withGattTargets(address) { targets -> statusReader.read(address, targets) }
+    fun readStatus(address: String) = readStatuses(listOf(address))
 
-    fun playLocateSound(address: String) = withGattTargets(address) { targets -> statusReader.playLocateSound(address, targets) }
+    fun readAllStatuses() = readStatuses(state.value.speakers.filter { it.canReadStatus }.map { it.address })
 
-    fun readAllStatuses() {
-        state.value.speakers.filter { it.canReadStatus }.forEach { readStatus(it.address) }
-    }
-
-    /**
-     * The control service is reached through the speaker's current LE address, which often rotates.
-     * If none was seen recently, listen to advertisements for a few seconds first.
-     */
-    private fun withGattTargets(address: String, action: (List<GattTarget>) -> Unit) {
+    fun playLocateSound(address: String) {
         viewModelScope.launch {
-            var record = bluetooth.devices.value[address] ?: return@launch
-            if (!record.hasFreshLeAddress()) {
-                bluetooth.scanAdvertisements(LE_SCAN_MILLIS)
-                record = withTimeoutOrNull(LE_SCAN_MILLIS) {
-                    bluetooth.devices.first { it[address]?.hasFreshLeAddress() == true }[address]
-                } ?: bluetooth.devices.value[address] ?: record
-                bluetooth.stopScan()
-            }
-            action(gattTargets(record))
+            val record = withFreshLeAddresses(listOf(address)).firstOrNull() ?: return@launch
+            statusReader.playLocateSound(address, gattTargets(record))
         }
     }
 
+    private fun readStatuses(addresses: List<String>) {
+        val wanted = addresses.filter { statusReader.markReading(it) }
+        if (wanted.isEmpty()) return
+        viewModelScope.launch {
+            for (record in withFreshLeAddresses(wanted)) {
+                statusReader.read(record.address, gattTargets(record), expectedName = record.name)
+            }
+        }
+    }
+
+    /**
+     * The control service of most models is reached through the speaker's current LE address,
+     * which rotates. Listens to advertisements (one shared scan) until every speaker that needs
+     * one has a fresh LE address, or a few seconds have passed.
+     */
+    private suspend fun withFreshLeAddresses(addresses: List<String>): List<DeviceRecord> {
+        fun needsLe(record: DeviceRecord?) =
+            record != null && !record.hasFreshLeAddress() && identify(record, prefs.state.value).model?.control != ControlProtocol.AA_BR_EDR
+        if (addresses.any { needsLe(bluetooth.devices.value[it]) } && bluetooth.beginAdvertLookup()) {
+            try {
+                withTimeoutOrNull(LE_SCAN_MILLIS) {
+                    bluetooth.devices.first { devices -> addresses.none { needsLe(devices[it]) } }
+                }
+            } finally {
+                bluetooth.endAdvertLookup()
+            }
+        }
+        return addresses.mapNotNull { bluetooth.devices.value[it] }
+    }
+
+    /**
+     * Ways to reach the speaker's control service, best first. Models that run it over the classic
+     * link start there; the others start with the LE address they advertise from.
+     */
     private fun gattTargets(record: DeviceRecord): List<GattTarget> {
         val model = identify(record, prefs.state.value).model
         val le = GattTarget(record.address, BluetoothDevice.TRANSPORT_LE)
         val classic = GattTarget(record.address, BluetoothDevice.TRANSPORT_BREDR)
-        val fresh = record.bleAddress?.takeIf { record.hasFreshLeAddress() }
-            ?.let { GattTarget(it, BluetoothDevice.TRANSPORT_LE) }
-        return listOfNotNull(fresh) + if (model?.control == ControlProtocol.AA_BR_EDR) listOf(classic, le) else listOf(le, classic)
+        val fresh = record.bleAddress?.takeIf { record.hasFreshLeAddress() && it != record.address }
+            ?.let { GattTarget(it, BluetoothDevice.TRANSPORT_LE, randomAddress = true) }
+        return if (model?.control == ControlProtocol.AA_BR_EDR) {
+            listOfNotNull(classic, fresh, le)
+        } else {
+            listOfNotNull(fresh, le, classic)
+        }
     }
 
     private fun DeviceRecord.hasFreshLeAddress(): Boolean =
@@ -244,11 +300,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun build(bt: BluetoothSnapshot, env: Environment, caps: DeviceCapabilities, max: Int?): UiState {
         val outputs = env.outputs
         val outputAddresses = outputs.mapNotNull { it.address }.toSet()
+        val connectedNames = bt.devices.values.filter { it.link == LinkState.CONNECTED }.groupingBy { it.name }.eachCount()
         fun isPlaying(record: DeviceRecord): Boolean {
             if (record.link != LinkState.CONNECTED) return false
             if (outputAddresses.isNotEmpty()) return record.address in outputAddresses
-            // Android 8 does not expose output addresses: fall back to names and the A2DP state.
-            return outputs.any { it.name == record.name } || bt.activeAddress == record.address
+            // No output addresses (Android 8, or not readable yet): use the active A2DP device,
+            // then a name match that is unique among connected devices.
+            if (bt.activeAddress != null) return bt.activeAddress == record.address
+            return connectedNames[record.name] == 1 && outputs.any { it.name == record.name }
         }
 
         fun toUi(record: DeviceRecord): SpeakerUi {
@@ -284,7 +343,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     .thenBy { it.name.lowercase() },
             )
         val discovered = all
-            .filter { (record, ui) -> !record.bonded && record.discovered && (ui.isJbl || (showAll && record.isAudioDevice)) }
+            .filter { (record, ui) ->
+                !record.bonded && record.discovered && record.seenWithin(env.now, DISCOVERY_WINDOW_MILLIS) &&
+                    (ui.isJbl || (showAll && record.isAudioDevice))
+            }
             .sortedByDescending { it.first.rssi ?: Int.MIN_VALUE }
             .map { it.second }
         val pairable = discovered.map { it.name }.toSet()
@@ -309,7 +371,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             discovered = discovered,
             nearbyNotInPairingMode = nearbyNotInPairingMode,
             scanning = bt.discovering,
-            connectedCount = bt.devices.values.count { it.link == LinkState.CONNECTED },
+            connectedCount = speakers.count { it.connected },
             maxConnected = max,
             playing = speakers.firstOrNull { it.playing },
             canConnectDirectly = HiddenBluetooth.canConnect,
@@ -323,6 +385,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val NEARBY_WINDOW_MILLIS = 120_000L
+        const val DISCOVERY_WINDOW_MILLIS = 300_000L
         const val LE_ADDRESS_MAX_AGE_MILLIS = 180_000L
         const val LE_SCAN_MILLIS = 7_000L
         val READABLE = setOf(ControlProtocol.AA_BLE, ControlProtocol.AA_BR_EDR)

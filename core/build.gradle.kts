@@ -14,6 +14,8 @@ java {
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+        // Compile against the Java 17 API even on a newer JDK (F-Droid builds with JDK 21).
+        freeCompilerArgs.add("-Xjdk-release=17")
         allWarningsAsErrors.set(true)
     }
 }

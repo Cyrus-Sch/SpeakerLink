@@ -71,7 +71,7 @@ class Frame(val command: Int, val payload: ByteArray) {
  * frames. Bytes before a start marker are dropped, as are notifications in the newer
  * "protocol 4" format (`00 DD ...` / `01 DD ...`), which this app does not speak.
  */
-class FrameDecoder {
+class FrameDecoder(private val maxFrameLength: Int = MAX_FRAME_LENGTH) {
     private var buffer = ByteArray(0)
 
     fun feed(chunk: ByteArray): List<Frame> {
@@ -95,6 +95,11 @@ class FrameDecoder {
             } else {
                 buffer[2].toInt() and 0xFF
             }
+            if (length > maxFrameLength) {
+                // Not a real header (0xAA also occurs inside payloads): skip this byte and resync.
+                buffer = buffer.copyOfRange(1, buffer.size)
+                continue
+            }
             if (buffer.size < header + length) break
             frames += Frame(command, buffer.copyOfRange(header, header + length))
             buffer = buffer.copyOfRange(header + length, buffer.size)
@@ -102,12 +107,20 @@ class FrameDecoder {
         return frames
     }
 
+    /** True while part of a frame is waiting for more bytes. */
+    val hasPartialFrame: Boolean get() = buffer.isNotEmpty()
+
     fun reset() {
         buffer = ByteArray(0)
     }
 
     private fun isProtocol4(chunk: ByteArray): Boolean =
         chunk.size >= 8 && (chunk[1].toInt() and 0xFF) == 0xDD && (chunk[0].toInt() and 0xFF) <= 0x01
+
+    companion object {
+        /** Status frames are small; only EQ / LED frames use long lengths, and none needs more. */
+        const val MAX_FRAME_LENGTH = 1024
+    }
 }
 
 enum class AudioChannel { STEREO, LEFT, RIGHT }

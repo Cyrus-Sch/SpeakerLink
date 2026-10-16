@@ -34,15 +34,29 @@ object HiddenBluetooth {
     private val a2dpGetActive by lazy { find(BluetoothA2dp::class.java, "getActiveDevice") }
     private val maxAudioDevices by lazy { find(BluetoothAdapter::class.java, "getMaxConnectedAudioDevices") }
 
-    val canConnect: Boolean get() = a2dpConnect != null
-    val canSwitchActive: Boolean get() = a2dpSetActive != null
+    /** Methods that failed with a permission or access error once; they are not tried again. */
+    private val blocked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    fun connect(a2dp: BluetoothA2dp, device: BluetoothDevice): HiddenCall<Boolean> = invoke(a2dpConnect, a2dp, device)
+    val canConnect: Boolean get() = a2dpConnect != null && "connect" !in blocked
+    val canSwitchActive: Boolean get() = a2dpSetActive != null && "setActiveDevice" !in blocked
 
-    fun disconnect(a2dp: BluetoothA2dp, device: BluetoothDevice): HiddenCall<Boolean> = invoke(a2dpDisconnect, a2dp, device)
+    fun connect(a2dp: BluetoothA2dp, device: BluetoothDevice): HiddenCall<Boolean> = guarded(a2dpConnect, a2dp, device)
+
+    fun disconnect(a2dp: BluetoothA2dp, device: BluetoothDevice): HiddenCall<Boolean> = guarded(a2dpDisconnect, a2dp, device)
 
     fun setActiveDevice(a2dp: BluetoothA2dp, device: BluetoothDevice): HiddenCall<Boolean> =
-        invoke(a2dpSetActive, a2dp, device)
+        guarded(a2dpSetActive, a2dp, device)
+
+    /**
+     * Like [invoke], but remembers methods the platform refuses (SecurityException or blocked
+     * access), so the UI can switch to the system screens instead of failing on every tap.
+     */
+    private fun guarded(method: Method?, target: Any, vararg args: Any?): HiddenCall<Boolean> {
+        if (method == null || method.name in blocked) return HiddenCall.Unavailable
+        val result = invoke<Boolean>(method, target, *args)
+        if (result is HiddenCall.Failed && result.error is SecurityException) blocked += method.name
+        return result
+    }
 
     fun activeDevice(a2dp: BluetoothA2dp): BluetoothDevice? =
         (invoke<BluetoothDevice?>(a2dpGetActive, a2dp) as? HiddenCall.Done)?.value
@@ -70,6 +84,7 @@ object HiddenBluetooth {
             Log.w(TAG, "${method.name} failed", e.targetException)
             HiddenCall.Failed(e.targetException ?: e)
         } catch (e: ReflectiveOperationException) {
+            blocked += method.name
             HiddenCall.Unavailable
         } catch (e: RuntimeException) {
             // ClassCastException, IllegalArgumentException, SecurityException...

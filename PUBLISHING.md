@@ -39,7 +39,7 @@ Add four repository secrets (GitHub, Settings > Secrets and variables > Actions)
 | `SPEAKERLINK_KEYSTORE_BASE64` | contents of `speakerlink-release.jks.b64` |
 | `SPEAKERLINK_KEYSTORE_PASSWORD` | the keystore password |
 | `SPEAKERLINK_KEY_ALIAS` | `speakerlink` |
-| `SPEAKERLINK_KEY_PASSWORD` | the key password |
+| `SPEAKERLINK_KEY_PASSWORD` | the key password (for a PKCS12 keystore, which `keytool` creates by default, the same as the keystore password) |
 
 Note the certificate fingerprint for F-Droid (lowercase, no colons):
 

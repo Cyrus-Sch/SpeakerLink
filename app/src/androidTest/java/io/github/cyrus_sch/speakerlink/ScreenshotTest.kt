@@ -3,7 +3,7 @@ package io.github.cyrus_sch.speakerlink
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -127,11 +127,23 @@ class ScreenshotTest {
         save("3_info")
     }
 
+    /**
+     * Writes to the Android Gradle plugin's "additional test output" directory (copied to
+     * build/outputs/connected_android_test_additional_output) and to the app's external files.
+     */
     private fun save(name: String) {
         compose.waitForIdle()
         val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val dir = File(context.getExternalFilesDir(null), "screenshots").apply { mkdirs() }
-        File(dir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        val directories = listOfNotNull(
+            InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")?.let(::File),
+            context.getExternalFilesDir(null)?.let { File(it, "screenshots") },
+        )
+        for (dir in directories) {
+            runCatching {
+                dir.mkdirs()
+                File(dir, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            }
+        }
     }
 }

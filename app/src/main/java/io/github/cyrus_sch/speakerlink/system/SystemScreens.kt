@@ -146,8 +146,12 @@ private data class LeAudioSupport(val unicast: Boolean?, val broadcastSource: Bo
         @RequiresApi(Build.VERSION_CODES.TIRAMISU)
         @SuppressLint("MissingPermission") // these feature queries need no permission
         fun read(adapter: BluetoothAdapter): LeAudioSupport {
-            fun supported(query: () -> Int): Boolean? =
-                runCatching { query() == BluetoothStatusCodes.FEATURE_SUPPORTED }.getOrNull()
+            // Anything but a definite answer (e.g. ERROR_BLUETOOTH_NOT_ENABLED) means "unknown".
+            fun supported(query: () -> Int): Boolean? = when (runCatching(query).getOrNull()) {
+                BluetoothStatusCodes.FEATURE_SUPPORTED -> true
+                BluetoothStatusCodes.FEATURE_NOT_SUPPORTED -> false
+                else -> null
+            }
             return LeAudioSupport(
                 unicast = supported { adapter.isLeAudioSupported() },
                 broadcastSource = supported { adapter.isLeAudioBroadcastSourceSupported() },

@@ -110,6 +110,14 @@ class JblProtocolTest {
     }
 
     @Test
+    fun implausibleLengthIsTreatedAsNoise() {
+        val decoder = FrameDecoder()
+        val frames = decoder.feed(hex("AA 86 FF FF AA 12 03 00 44 50"))
+        assertEquals(listOf(0x12), frames.map { it.command })
+        assertTrue(!decoder.hasPartialFrame)
+    }
+
+    @Test
     fun protocol4NotificationsAreIgnored() {
         val decoder = FrameDecoder()
         assertTrue(decoder.feed(hex("00 DD 01 00 01 00 04 00 AA 12 03 00")).isEmpty())

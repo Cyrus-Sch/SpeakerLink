@@ -56,6 +56,11 @@ class AudioOutputMonitor(context: Context) {
         )
     }
 
+    /** Re-reads the outputs, e.g. after the Bluetooth permission was granted (addresses become readable). */
+    fun refresh() {
+        _outputs.value = read()
+    }
+
     fun bluetoothDevices(): List<AudioDeviceInfo> =
         audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS).orEmpty().filter { it.type in bluetoothTypes }
 

@@ -74,6 +74,12 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
     private var scanJob: Job? = null
     private var groupJob: Job? = null
 
+    /** The user's "Scan" is running (classic discovery plus LE). */
+    private var userScanActive = false
+
+    /** Number of status reads currently waiting for a speaker's LE address. */
+    private var advertLookups = 0
+
     /** Registers receivers and binds the A2DP proxy. Safe to call repeatedly. */
     fun start() {
         val adapter = adapter ?: return
@@ -133,10 +139,13 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
             return
         }
         if (adapter.isDiscovering) adapter.cancelDiscovery()
-        val started = runCatching { adapter.startDiscovery() }.getOrDefault(false)
-        if (!started) {
+        // Only devices found by this scan count as "in pairing mode".
+        _devices.update { map -> map.mapValues { (_, record) -> if (record.discovered) record.copy(discovered = false) else record } }
+        val discoveryStarted = runCatching { adapter.startDiscovery() }.getOrDefault(false)
+        if (!discoveryStarted) {
             _events.tryEmit(BluetoothEvent.ScanFailed(locationOff = false))
         }
+        userScanActive = true
         bleScanner.start()
         scanJob?.cancel()
         scanJob = scope.launch {
@@ -145,23 +154,31 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
         }
     }
 
-    /** Listens for LE advertisements only (no classic discovery), e.g. to find a speaker's LE address. */
-    fun scanAdvertisements(durationMillis: Long = 8_000) {
-        if (adapter?.isEnabled != true || !BtPermissions.canScan(context)) return
-        bleScanner.start()
-        scanJob?.cancel()
-        scanJob = scope.launch {
-            delay(durationMillis)
-            stopScan()
-        }
-    }
-
+    /** Stops the user's scan. LE listening continues while a status read still needs it. */
     fun stopScan() {
         scanJob?.cancel()
         scanJob = null
-        bleScanner.stop()
+        userScanActive = false
+        if (advertLookups == 0) bleScanner.stop()
         val adapter = adapter ?: return
         if (BtPermissions.canScan(context) && adapter.isDiscovering) runCatching { adapter.cancelDiscovery() }
+    }
+
+    /**
+     * Starts listening for LE advertisements (no classic discovery) to learn speakers' current LE
+     * addresses. Every call must be balanced by [endAdvertLookup].
+     */
+    fun beginAdvertLookup(): Boolean {
+        if (adapter?.isEnabled != true || !BtPermissions.canScan(context)) return false
+        advertLookups++
+        bleScanner.start()
+        return true
+    }
+
+    fun endAdvertLookup() {
+        if (advertLookups == 0) return
+        advertLookups--
+        if (advertLookups == 0 && !userScanActive) bleScanner.stop()
     }
 
     // ---------------------------------------------------------------- pairing and connections
@@ -221,7 +238,19 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
      * speaker, so [playOn] is connected last and then made the active output explicitly.
      */
     fun connectAll(addresses: List<String>, playOn: String?) {
-        val ordered = addresses.distinct().sortedBy { it == playOn }
+        var ordered = addresses.distinct().filter { _devices.value[it]?.link != LinkState.CONNECTED }.sortedBy { it == playOn }
+        val limit = effectiveMaxConnected()
+        if (limit != null) {
+            val room = (limit - connectedCount()).coerceAtLeast(if (playOn != null) 1 else 0)
+            if (ordered.size > room) {
+                // Keep the speaker that should play (it is last) and as many others as fit.
+                ordered = ordered.takeLast(room)
+                val skipped = addresses.firstOrNull { it !in ordered && _devices.value[it]?.link != LinkState.CONNECTED }
+                if (skipped != null) {
+                    _events.tryEmit(BluetoothEvent.ConnectFailed(skipped, displayName(skipped), limitReached = true))
+                }
+            }
+        }
         groupJob?.cancel()
         groupJob = scope.launch {
             for (address in ordered) {
@@ -259,9 +288,13 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
 
     fun maxConnectedAudioDevices(): Int? {
         val adapter = adapter ?: return null
-        if (!BtPermissions.canConnect(context)) return null
+        if (!BtPermissions.canConnect(context) || !adapter.isEnabled) return null
         return HiddenBluetooth.maxConnectedAudioDevices(adapter)
     }
+
+    /** Android 8 supports a single A2DP connection; later versions report their limit. */
+    private fun effectiveMaxConnected(): Int? =
+        maxConnectedAudioDevices() ?: if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) 1 else null
 
     fun connectedCount(): Int = _devices.value.values.count { it.link == LinkState.CONNECTED }
 
@@ -269,11 +302,24 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
 
     private fun watchConnect(address: String, requestedAt: Long) {
         scope.launch {
-            delay(CONNECT_TIMEOUT_MILLIS)
-            val record = _devices.value[address] ?: return@launch
-            if (record.connectRequestedAt == requestedAt && record.link != LinkState.CONNECTED) {
+            var waited = 0L
+            while (true) {
+                delay(CONNECT_CHECK_MILLIS)
+                waited += CONNECT_CHECK_MILLIS
+                val record = _devices.value[address] ?: return@launch
+                if (record.connectRequestedAt != requestedAt) return@launch // a broadcast settled it
+                when (val actual = refreshedLink(address)) {
+                    LinkState.CONNECTED -> {
+                        upsert(address) { it.copy(connectRequestedAt = null, link = actual) }
+                        _events.tryEmit(BluetoothEvent.Connected(address, displayName(address)))
+                        return@launch
+                    }
+                    LinkState.CONNECTING -> if (waited < CONNECT_GIVE_UP_MILLIS) continue
+                    else -> Unit
+                }
                 upsert(address) { it.copy(connectRequestedAt = null, link = refreshedLink(address)) }
                 _events.tryEmit(BluetoothEvent.ConnectFailed(address, displayName(address), limitReached = false))
+                return@launch
             }
         }
     }
@@ -340,32 +386,47 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
     private fun onAdvertisement(advert: HarmanAdvertisement, bleAddress: String, bleName: String?, rssi: Int) {
         val now = SystemClock.elapsedRealtime()
         val devices = _devices.value
-        val target = when {
+        val exact = when {
             devices.containsKey(bleAddress) -> bleAddress
             else -> advert.classicAddressCandidates.firstOrNull { devices.containsKey(it) }
-                ?: matchByName(devices.values, bleName)
-                ?: matchByModel(devices.values, advert)
         }
-        if (target != null) {
-            upsert(target) {
-                it.copy(advertisement = advert, lastSeen = now, rssi = rssi, bleAddress = bleAddress, bleSeenAt = now)
-            }
-            _nearbyAdverts.update { it - bleAddress }
+        // An advert that names a classic address we do not know belongs to someone else's speaker.
+        val target = exact ?: if (advert.classicAddressCandidates.isEmpty()) {
+            matchByName(devices.values, bleName) ?: matchByModel(devices.values, advert)
         } else {
-            _nearbyAdverts.update { it + (bleAddress to NearbyAdvert(bleAddress, bleName, advert, now)) }
+            null
         }
+        if (target == null) {
+            val previous = _nearbyAdverts.value[bleAddress]
+            if (previous == null || now - previous.lastSeen > ADVERT_THROTTLE_MILLIS) {
+                _nearbyAdverts.update { it + (bleAddress to NearbyAdvert(bleAddress, bleName, advert, now)) }
+            }
+            return
+        }
+        val record = devices.getValue(target)
+        val recentExact = record.bleMatchExact && record.bleSeenAt != null && now - record.bleSeenAt < EXACT_MATCH_HOLD_MILLIS
+        if (exact == null && recentExact && record.bleAddress != bleAddress) return // keep the exact match
+        val unchanged = record.bleAddress == bleAddress && record.advertisement == advert &&
+            record.bleSeenAt != null && now - record.bleSeenAt < ADVERT_THROTTLE_MILLIS
+        if (unchanged) return // adverts arrive several times a second; do not rebuild the UI for each
+        upsert(target) {
+            it.copy(
+                advertisement = advert,
+                lastSeen = now,
+                rssi = rssi,
+                bleAddress = bleAddress,
+                bleSeenAt = now,
+                bleMatchExact = exact != null,
+            )
+        }
+        if (_nearbyAdverts.value.containsKey(bleAddress)) _nearbyAdverts.update { it - bleAddress }
     }
 
-    /** LE names are often truncated ("JBL Fli"), so a prefix of the classic name counts. */
-    private fun matchByName(devices: Collection<DeviceRecord>, bleName: String?): String? {
-        if (bleName == null || bleName.length < 6) return null
-        return devices.singleOrNull { record ->
-            val name = record.name ?: return@singleOrNull false
-            name.equals(bleName, ignoreCase = true) || name.startsWith(bleName, ignoreCase = true)
-        }?.address
-    }
+    /** LE names are often truncated ("JBL Fli"); only a single paired speaker may match. */
+    private fun matchByName(devices: Collection<DeviceRecord>, bleName: String?): String? =
+        devices.singleOrNull { it.bonded && SpeakerIdentifier.sameSpeakerName(it.name, bleName) }?.address
 
-    /** Last resort: exactly one bonded speaker of the advertised model. */
+    /** Last resort: exactly one paired speaker of the advertised model. */
     private fun matchByModel(devices: Collection<DeviceRecord>, advert: HarmanAdvertisement): String? {
         val model = advert.model ?: return null
         return devices.singleOrNull { record ->
@@ -422,9 +483,19 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
                 if (_adapterState.value == AdapterState.ON) {
                     refresh()
                 } else {
+                    scanJob?.cancel()
+                    groupJob?.cancel()
+                    userScanActive = false
+                    advertLookups = 0
+                    bleScanner.reset()
                     _discovering.value = false
                     _activeAddress.value = null
-                    _devices.update { map -> map.mapValues { (_, r) -> r.copy(link = LinkState.DISCONNECTED, a2dpPlaying = false) } }
+                    _nearbyAdverts.value = emptyMap()
+                    _devices.update { map ->
+                        map.mapValues { (_, r) ->
+                            r.copy(link = LinkState.DISCONNECTED, a2dpPlaying = false, connectRequestedAt = null, pairRequested = false)
+                        }
+                    }
                 }
             }
             BluetoothAdapter.ACTION_DISCOVERY_STARTED -> _discovering.value = true
@@ -443,12 +514,19 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
                 )
                 _devices.update { it + (device.address to record) }
                 // An advertisement seen earlier may belong to this device.
-                _nearbyAdverts.value.values.firstOrNull { advert ->
-                    device.address in advert.advertisement.classicAddressCandidates ||
-                        (advert.name != null && record.name?.startsWith(advert.name, ignoreCase = true) == true)
-                }?.let { advert ->
+                val adverts = _nearbyAdverts.value.values
+                val byAddress = adverts.firstOrNull { device.address in it.advertisement.classicAddressCandidates }
+                val byName = adverts.filter {
+                    it.advertisement.classicAddressCandidates.isEmpty() && SpeakerIdentifier.sameSpeakerName(it.name, record.name)
+                }.singleOrNull()
+                (byAddress ?: byName)?.let { advert ->
                     upsert(device.address) {
-                        it.copy(advertisement = advert.advertisement, bleAddress = advert.bleAddress, bleSeenAt = advert.lastSeen)
+                        it.copy(
+                            advertisement = advert.advertisement,
+                            bleAddress = advert.bleAddress,
+                            bleSeenAt = advert.lastSeen,
+                            bleMatchExact = byAddress != null,
+                        )
                     }
                     _nearbyAdverts.update { it - advert.bleAddress }
                 }
@@ -532,7 +610,10 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
 
     companion object {
         private const val TAG = "SpeakerBluetooth"
-        private const val CONNECT_TIMEOUT_MILLIS = 20_000L
+        private const val CONNECT_CHECK_MILLIS = 15_000L
+        private const val CONNECT_GIVE_UP_MILLIS = 45_000L
+        private const val ADVERT_THROTTLE_MILLIS = 1_500L
+        private const val EXACT_MATCH_HOLD_MILLIS = 60_000L
 
         /** Hidden but long-standing protected broadcast (BluetoothA2dp.ACTION_ACTIVE_DEVICE_CHANGED). */
         const val ACTION_A2DP_ACTIVE_DEVICE_CHANGED = "android.bluetooth.a2dp.profile.action.ACTIVE_DEVICE_CHANGED"

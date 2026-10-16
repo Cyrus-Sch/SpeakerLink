@@ -6,7 +6,10 @@ plugins {
 // Release signing is optional: CI passes a keystore through environment variables. Without them
 // (for example on the F-Droid build server, which signs with its own key) the release APK is
 // built unsigned.
-val releaseKeystore: String? = providers.environmentVariable("SPEAKERLINK_KEYSTORE_FILE").orNull
+val releaseKeystore: String? = providers.environmentVariable("SPEAKERLINK_KEYSTORE_FILE").orNull?.takeIf { it.isNotBlank() }
+
+fun requiredEnv(name: String): String =
+    providers.environmentVariable(name).orNull?.takeIf { it.isNotEmpty() } ?: error("$name is not set")
 
 android {
     namespace = "io.github.cyrus_sch.speakerlink"
@@ -25,9 +28,9 @@ android {
         if (releaseKeystore != null) {
             create("release") {
                 storeFile = file(releaseKeystore)
-                storePassword = providers.environmentVariable("SPEAKERLINK_KEYSTORE_PASSWORD").get()
-                keyAlias = providers.environmentVariable("SPEAKERLINK_KEY_ALIAS").get()
-                keyPassword = providers.environmentVariable("SPEAKERLINK_KEY_PASSWORD").get()
+                storePassword = requiredEnv("SPEAKERLINK_KEYSTORE_PASSWORD")
+                keyAlias = requiredEnv("SPEAKERLINK_KEY_ALIAS")
+                keyPassword = requiredEnv("SPEAKERLINK_KEY_PASSWORD")
             }
         }
     }

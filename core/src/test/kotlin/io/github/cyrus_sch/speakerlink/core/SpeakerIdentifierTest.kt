@@ -98,6 +98,15 @@ class SpeakerIdentifierTest {
     }
 
     @Test
+    fun sameSpeakerNameAcceptsTruncatedLeNames() {
+        assertTrue(SpeakerIdentifier.sameSpeakerName("JBL Flip 6", "jbl flip6"))
+        assertTrue(SpeakerIdentifier.sameSpeakerName("FFR JBL Fli", "FFR JBL Flip 7"))
+        assertFalse(SpeakerIdentifier.sameSpeakerName("JBL", "JBL Flip 6"))
+        assertFalse(SpeakerIdentifier.sameSpeakerName("JBL Flip 6", "JBL Flip 5"))
+        assertFalse(SpeakerIdentifier.sameSpeakerName(null, "JBL Flip 6"))
+    }
+
+    @Test
     fun jblWordMustStandAlone() {
         assertTrue(SpeakerIdentifier.looksLikeJbl("JBL Flip 6"))
         assertTrue(SpeakerIdentifier.looksLikeJbl("my-jbl"))

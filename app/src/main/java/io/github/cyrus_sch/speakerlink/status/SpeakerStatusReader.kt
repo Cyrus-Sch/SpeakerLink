@@ -17,6 +17,7 @@ import android.util.Log
 import io.github.cyrus_sch.speakerlink.bluetooth.BtPermissions
 import io.github.cyrus_sch.speakerlink.core.FrameDecoder
 import io.github.cyrus_sch.speakerlink.core.JblProtocol
+import io.github.cyrus_sch.speakerlink.core.SpeakerIdentifier
 import io.github.cyrus_sch.speakerlink.core.SpeakerInfo
 import io.github.cyrus_sch.speakerlink.core.SpeakerInfoParser
 import kotlinx.coroutines.CoroutineScope
@@ -42,11 +43,12 @@ sealed interface SpeakerStatus {
 
     data class Failed(val reason: Reason) : SpeakerStatus
 
+    /** Ordered from least to most specific; the most specific failure seen is reported. */
     enum class Reason {
-        /** The speaker could not be reached over Bluetooth LE (off, out of range, or busy). */
+        /** The speaker could not be reached over Bluetooth (off, out of range, or busy). */
         UNREACHABLE,
 
-        /** Connected, but the speaker has no JBL control service. */
+        /** Connected, but the speaker has no JBL control service the app understands. */
         NO_CONTROL_SERVICE,
 
         /** Connected, but the speaker did not answer. Another phone may hold its control link. */
@@ -56,8 +58,12 @@ sealed interface SpeakerStatus {
     }
 }
 
-/** One way to reach a speaker's control service. */
-data class GattTarget(val address: String, val transport: Int)
+/**
+ * One way to reach a speaker's control service.
+ *
+ * @property randomAddress the address is a (rotating) random LE address, not the public one.
+ */
+data class GattTarget(val address: String, val transport: Int, val randomAddress: Boolean = false)
 
 /**
  * Talks to the JBL control service (see [JblProtocol]) to read battery, name and firmware, or to
@@ -72,39 +78,90 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
     private val _statuses = MutableStateFlow<Map<String, SpeakerStatus>>(emptyMap())
     val statuses: StateFlow<Map<String, SpeakerStatus>> = _statuses.asStateFlow()
 
-    /** Reads the status of the speaker identified by [key], trying [targets] in order. */
-    fun read(key: String, targets: List<GattTarget>) {
-        if (_statuses.value[key] == SpeakerStatus.Reading) return
+    /** Marks [key] as being read, so the UI shows progress while the caller prepares targets. */
+    fun markReading(key: String): Boolean {
+        if (_statuses.value[key] == SpeakerStatus.Reading) return false
+        _statuses.update { it + (key to SpeakerStatus.Reading) }
+        return true
+    }
+
+    /**
+     * Reads the status of the speaker identified by [key], trying [targets] in order. A reply that
+     * names a different speaker than [expectedName] is ignored, because LE addresses are matched
+     * to paired speakers partly by heuristics.
+     */
+    fun read(key: String, targets: List<GattTarget>, expectedName: String?) {
         _statuses.update { it + (key to SpeakerStatus.Reading) }
         scope.launch {
             val status = mutex.withLock {
-                execute(targets, listOf(JblProtocol.requestSpeakerInfo(), JblProtocol.requestFirmware()), INFO_COLLECT_MILLIS)
+                execute(
+                    targets,
+                    listOf(JblProtocol.requestSpeakerInfo(), JblProtocol.requestFirmware()),
+                    INFO_COLLECT_MILLIS,
+                    expectedName,
+                    expectInfo = true,
+                )
             }
-            _statuses.update { it + (key to status) }
+            _statuses.update { current ->
+                // A failed refresh keeps showing the last good reading.
+                val previous = current[key]
+                if (status is SpeakerStatus.Failed && previous is SpeakerStatus.Ready && previous.info.batteryPercent != null) {
+                    current + (key to previous)
+                } else {
+                    current + (key to status)
+                }
+            }
         }
     }
 
-    /** Plays the speaker's "find me" sound. Returns through [statuses] like [read]. */
+    /** Plays the speaker's "find me" sound. Only failures are reported through [statuses]. */
     fun playLocateSound(key: String, targets: List<GattTarget>) {
         scope.launch {
-            val status = mutex.withLock { execute(targets, listOf(JblProtocol.playSound()), 400) }
+            val status = mutex.withLock {
+                execute(targets, listOf(JblProtocol.playSound()), 400, expectedName = null, expectInfo = false)
+            }
             if (status is SpeakerStatus.Failed) _statuses.update { it + (key to status) }
+            else if (_statuses.value[key] == SpeakerStatus.Reading) _statuses.update { it - key }
         }
     }
 
-    private suspend fun execute(targets: List<GattTarget>, commands: List<ByteArray>, collectMillis: Long): SpeakerStatus {
+    private suspend fun execute(
+        targets: List<GattTarget>,
+        commands: List<ByteArray>,
+        collectMillis: Long,
+        expectedName: String?,
+        expectInfo: Boolean,
+    ): SpeakerStatus {
         if (!BtPermissions.canConnect(context)) return SpeakerStatus.Failed(SpeakerStatus.Reason.NO_PERMISSION)
         var failure = SpeakerStatus.Reason.UNREACHABLE
+        fun note(reason: SpeakerStatus.Reason) {
+            if (reason > failure) failure = reason
+        }
         for (target in targets.distinct()) {
-            // A fresh connection often fails once with status 133; one retry is usually enough.
-            repeat(2) { attempt ->
-                when (val outcome = session(target, commands, collectMillis)) {
-                    is Outcome.Success -> return SpeakerStatus.Ready(outcome.info, SystemClock.elapsedRealtime())
-                    Outcome.NoService -> failure = SpeakerStatus.Reason.NO_CONTROL_SERVICE
-                    Outcome.NoResponse -> failure = SpeakerStatus.Reason.NO_RESPONSE
-                    Outcome.ConnectFailed -> if (attempt == 0) delay(600)
+            var attempt = 0
+            while (attempt < 2) {
+                attempt++
+                when (val outcome = session(target, commands, collectMillis, expectInfo)) {
+                    is Outcome.Success -> {
+                        val name = outcome.info.name
+                        if (expectedName != null && name != null && !SpeakerIdentifier.sameSpeakerName(expectedName, name)) {
+                            Log.i(TAG, "Ignoring reply from \"$name\" while looking for \"$expectedName\"")
+                            break // someone else's speaker: try the next target
+                        }
+                        return SpeakerStatus.Ready(outcome.info, SystemClock.elapsedRealtime())
+                    }
+                    // A fresh connection often fails at once with status 133; one retry usually helps.
+                    Outcome.FastFailure, Outcome.NotSent -> delay(RETRY_DELAY_MILLIS)
+                    Outcome.Timeout -> break
+                    Outcome.NoService -> {
+                        note(SpeakerStatus.Reason.NO_CONTROL_SERVICE)
+                        break
+                    }
+                    Outcome.NoResponse -> {
+                        note(SpeakerStatus.Reason.NO_RESPONSE)
+                        break
+                    }
                 }
-                if (failure != SpeakerStatus.Reason.UNREACHABLE) return SpeakerStatus.Failed(failure)
             }
         }
         return SpeakerStatus.Failed(failure)
@@ -112,9 +169,17 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
 
     private sealed interface Outcome {
         data class Success(val info: SpeakerInfo) : Outcome
-        data object ConnectFailed : Outcome
+
+        /** The stack reported a connection error quickly (worth one retry). */
+        data object FastFailure : Outcome
+
+        /** Nothing happened before the connect timeout (speaker off or out of range). */
+        data object Timeout : Outcome
         data object NoService : Outcome
         data object NoResponse : Outcome
+
+        /** Connected, but no command could be written. */
+        data object NotSent : Outcome
     }
 
     private sealed interface Event {
@@ -126,11 +191,11 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         class Notification(val value: ByteArray) : Event
     }
 
-    private suspend fun session(target: GattTarget, commands: List<ByteArray>, collectMillis: Long): Outcome {
-        val adapter = adapter ?: return Outcome.ConnectFailed
-        if (!BluetoothAdapter.checkBluetoothAddress(target.address)) return Outcome.ConnectFailed
-        val device: BluetoothDevice = runCatching { adapter.getRemoteDevice(target.address) }.getOrNull()
-            ?: return Outcome.ConnectFailed
+    /** Thrown inside a session when the link drops. */
+    private class Disconnected : Exception()
+
+    private suspend fun session(target: GattTarget, commands: List<ByteArray>, collectMillis: Long, expectInfo: Boolean): Outcome {
+        val device = remoteDevice(target) ?: return Outcome.FastFailure
         val events = Channel<Event>(Channel.UNLIMITED)
         val callback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -167,36 +232,66 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
             }
         }
 
+        @Suppress("DEPRECATION") // the replacement needs API 37
         val gatt = withContext(Dispatchers.Main) {
             runCatching { device.connectGatt(context, false, callback, target.transport) }.getOrNull()
-        } ?: return Outcome.ConnectFailed
+        } ?: return Outcome.FastFailure
+
+        val decoder = FrameDecoder()
+        var info = SpeakerInfo()
+        var framesSeen = 0
+        var unsupported = false
+        fun consume(event: Event) {
+            if (event !is Event.Notification) return
+            for (frame in decoder.feed(event.value)) {
+                framesSeen++
+                if (frame.command == JblProtocol.CMD_UNSUPPORTED) unsupported = true
+                SpeakerInfoParser.parse(frame)?.let { info = info.merge(it) }
+            }
+        }
+
+        /** Waits for an event matching [match]; notifications are consumed, a dropped link throws. */
+        suspend fun await(timeoutMillis: Long, match: (Event) -> Boolean): Event? = withTimeoutOrNull(timeoutMillis) {
+            var found: Event? = null
+            while (found == null) {
+                val event = events.receive()
+                when {
+                    match(event) -> found = event
+                    event is Event.Connection && event.state != BluetoothProfile.STATE_CONNECTED -> throw Disconnected()
+                    else -> consume(event)
+                }
+            }
+            found
+        }
 
         try {
-            val connected = withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) {
-                var result: Boolean? = null
+            val connection = withTimeoutOrNull(CONNECT_TIMEOUT_MILLIS) {
+                var result: Event.Connection? = null
                 while (result == null) {
                     val event = events.receive()
-                    if (event is Event.Connection) {
-                        result = event.status == BluetoothGatt.GATT_SUCCESS && event.state == BluetoothProfile.STATE_CONNECTED
-                    }
+                    if (event is Event.Connection) result = event
                 }
                 result
-            } ?: false
-            if (!connected) return Outcome.ConnectFailed
+            } ?: return Outcome.Timeout
+            if (connection.status != BluetoothGatt.GATT_SUCCESS || connection.state != BluetoothProfile.STATE_CONNECTED) {
+                return Outcome.FastFailure
+            }
 
-            if (gatt.requestMtu(MTU)) awaitEvent(events, 2_000) { it is Event.MtuChanged }
-            if (!gatt.discoverServices()) return Outcome.NoService
-            val discovered = awaitEvent(events, 10_000) { it is Event.ServicesDiscovered } as? Event.ServicesDiscovered
-            if (discovered?.status != BluetoothGatt.GATT_SUCCESS) return Outcome.NoService
+            if (gatt.requestMtu(MTU)) await(2_000) { it is Event.MtuChanged }
+            if (!gatt.discoverServices()) return Outcome.FastFailure
+            val discovered = await(10_000) { it is Event.ServicesDiscovered } as? Event.ServicesDiscovered
+                ?: return Outcome.FastFailure
+            if (discovered.status != BluetoothGatt.GATT_SUCCESS) return Outcome.FastFailure
 
             val service = gatt.getService(JblProtocol.SERVICE) ?: return Outcome.NoService
             val notify = service.getCharacteristic(JblProtocol.NOTIFY_CHARACTERISTIC) ?: return Outcome.NoService
             val write = service.getCharacteristic(JblProtocol.WRITE_CHARACTERISTIC) ?: return Outcome.NoService
 
             gatt.setCharacteristicNotification(notify, true)
+            // Some speakers have no CCCD and notify anyway; a failed write is not fatal.
             notify.getDescriptor(JblProtocol.CCCD)?.let { descriptor ->
                 if (writeDescriptor(gatt, descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) {
-                    awaitEvent(events, 1_500) { it is Event.DescriptorWritten }
+                    await(1_500) { it is Event.DescriptorWritten }
                 }
             }
 
@@ -207,13 +302,19 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
                 BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             }
 
-            val decoder = FrameDecoder()
-            var info = SpeakerInfo()
-            var answered = false
+            var written = 0
             for (command in commands) {
-                if (!writeCharacteristic(gatt, write, command, writeType)) continue
-                if (withResponse) awaitEvent(events, 1_500) { it is Event.CharacteristicWritten }
-                // Collect the burst of answers; stop early once the speaker goes quiet.
+                // A partial frame left over from the previous answer must not swallow this one.
+                if (decoder.hasPartialFrame) decoder.reset()
+                var sent = writeCharacteristic(gatt, write, command, writeType)
+                if (!sent) {
+                    delay(300) // the stack may still be busy with the previous operation
+                    sent = writeCharacteristic(gatt, write, command, writeType)
+                }
+                if (!sent) continue
+                written++
+                if (withResponse) await(1_500) { it is Event.CharacteristicWritten }
+                // Collect the answers; stop early once the speaker goes quiet.
                 val deadline = SystemClock.elapsedRealtime() + collectMillis
                 var quietUntil = deadline
                 while (true) {
@@ -221,27 +322,25 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
                     val until = minOf(deadline, quietUntil)
                     if (now >= until) break
                     val event = withTimeoutOrNull(until - now) { events.receive() } ?: break
-                    when (event) {
-                        is Event.Notification -> {
-                            answered = true
-                            for (frame in decoder.feed(event.value)) {
-                                SpeakerInfoParser.parse(frame)?.let { info = info.merge(it) }
-                            }
-                            quietUntil = SystemClock.elapsedRealtime() + QUIET_MILLIS
-                        }
-                        is Event.Connection -> if (event.state != BluetoothProfile.STATE_CONNECTED) break
-                        else -> Unit
+                    if (event is Event.Connection && event.state != BluetoothProfile.STATE_CONNECTED) throw Disconnected()
+                    if (event is Event.Notification) {
+                        consume(event)
+                        quietUntil = SystemClock.elapsedRealtime() + QUIET_MILLIS
                     }
                 }
             }
             return when {
+                written == 0 -> Outcome.NotSent
+                !expectInfo -> Outcome.Success(info)
                 !info.isEmpty -> Outcome.Success(info)
-                answered || commands.none { it[1].toInt() == JblProtocol.CMD_REQUEST_INFO } -> Outcome.Success(info)
+                unsupported -> Outcome.NoService
                 else -> Outcome.NoResponse
             }
+        } catch (e: Disconnected) {
+            return if (framesSeen > 0 && !info.isEmpty) Outcome.Success(info) else Outcome.FastFailure
         } catch (e: SecurityException) {
             Log.w(TAG, "Permission lost during GATT session", e)
-            return Outcome.ConnectFailed
+            return Outcome.FastFailure
         } finally {
             withContext(NonCancellable + Dispatchers.Main) {
                 runCatching { gatt.disconnect() }
@@ -251,15 +350,18 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         }
     }
 
-    private suspend fun awaitEvent(events: Channel<Event>, timeoutMillis: Long, match: (Event) -> Boolean): Event? =
-        withTimeoutOrNull(timeoutMillis) {
-            var found: Event? = null
-            while (found == null) {
-                val event = events.receive()
-                if (match(event)) found = event
+    private fun remoteDevice(target: GattTarget): BluetoothDevice? {
+        val adapter = adapter ?: return null
+        if (!BluetoothAdapter.checkBluetoothAddress(target.address)) return null
+        return runCatching {
+            if (target.randomAddress && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // Keeps the address type, which getRemoteDevice(String) would reset to public.
+                adapter.getRemoteLeDevice(target.address, BluetoothDevice.ADDRESS_TYPE_RANDOM)
+            } else {
+                adapter.getRemoteDevice(target.address)
             }
-            found
-        }
+        }.getOrNull()
+    }
 
     @Suppress("DEPRECATION")
     private fun writeDescriptor(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, value: ByteArray): Boolean =
@@ -287,7 +389,8 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
     private companion object {
         const val TAG = "SpeakerStatusReader"
         const val MTU = 517
-        const val CONNECT_TIMEOUT_MILLIS = 12_000L
+        const val CONNECT_TIMEOUT_MILLIS = 10_000L
+        const val RETRY_DELAY_MILLIS = 600L
         const val INFO_COLLECT_MILLIS = 2_500L
         const val QUIET_MILLIS = 700L
     }

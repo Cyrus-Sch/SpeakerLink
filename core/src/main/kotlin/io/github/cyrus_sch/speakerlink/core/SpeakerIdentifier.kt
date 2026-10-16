@@ -45,6 +45,19 @@ object SpeakerIdentifier {
         name != null && jblWord.containsMatchIn(normalize(name))
 
     /**
+     * True when two Bluetooth names plausibly belong to the same speaker. LE advertisements often
+     * carry a truncated name ("JBL Fli"), so a prefix of at least six characters also counts.
+     */
+    fun sameSpeakerName(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        val x = normalize(a)
+        val y = normalize(b)
+        if (x == y) return true
+        val (short, long) = if (x.length <= y.length) x to y else y to x
+        return short.length >= 6 && long.startsWith(short)
+    }
+
+    /**
      * Finds the model whose name pattern matches the longest part of [name]. Longest-match keeps
      * "JBL PartyBox Encore Essential 2" from being read as "PartyBox Encore".
      */

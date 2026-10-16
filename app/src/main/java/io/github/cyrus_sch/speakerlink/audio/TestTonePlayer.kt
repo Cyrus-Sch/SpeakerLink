@@ -33,12 +33,15 @@ class TestTonePlayer(context: Context) {
      * (only possible when the system exposes several Bluetooth outputs, e.g. Samsung Dual Audio).
      */
     fun play(devices: List<AudioDeviceInfo> = emptyList()) {
+        val tracks = (devices.ifEmpty { listOf(null) }).mapNotNull { device -> createTrack(device) }
+            .filter { track ->
+                runCatching { track.play() }.onFailure { track.release() }.isSuccess
+            }
+        if (tracks.isEmpty()) return
         val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(attributes)
             .build()
         audioManager?.requestAudioFocus(focus)
-        val tracks = (devices.ifEmpty { listOf(null) }).mapNotNull { device -> createTrack(device) }
-        tracks.forEach { it.play() }
         handler.postDelayed({
             tracks.forEach { track -> runCatching { track.stop() }; track.release() }
             audioManager?.abandonAudioFocusRequest(focus)
@@ -58,7 +61,10 @@ class TestTonePlayer(context: Context) {
             .setTransferMode(AudioTrack.MODE_STATIC)
             .setBufferSizeInBytes(pcm.size * 2)
             .build()
-        track.write(pcm, 0, pcm.size)
+        if (track.write(pcm, 0, pcm.size) != pcm.size) {
+            track.release()
+            return null
+        }
         if (device != null) track.setPreferredDevice(device)
         track
     } catch (e: RuntimeException) {

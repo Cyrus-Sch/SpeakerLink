@@ -419,6 +419,7 @@ private fun StatusLine(status: SpeakerStatus) {
                 AudioChannel.STEREO, null -> Unit
             }
             info.firmware?.let { add(stringResource(R.string.status_firmware, it)) }
+            if (isEmpty()) add(stringResource(R.string.status_no_details))
         }.joinToString(" · ")
     }
     if (text.isNotEmpty()) {

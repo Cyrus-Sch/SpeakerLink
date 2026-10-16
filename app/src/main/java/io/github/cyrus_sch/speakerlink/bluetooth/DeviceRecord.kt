@@ -48,6 +48,8 @@ data class DeviceRecord(
     val bleAddress: String? = null,
     /** SystemClock.elapsedRealtime() of the last LE advertisement. */
     val bleSeenAt: Long? = null,
+    /** The LE address was tied to this device by address, not by name or model. */
+    val bleMatchExact: Boolean = false,
     /** SystemClock.elapsedRealtime() of a connect request the app is still waiting for. */
     val connectRequestedAt: Long? = null,
     /** The app asked to pair with this device and will connect it once bonding succeeds. */

@@ -71,6 +71,7 @@
     <string name="status_channel_left">Left channel</string>
     <string name="status_channel_right">Right channel</string>
     <string name="status_channel_stereo">Stereo</string>
+    <string name="status_no_details">The speaker answered but did not report its battery.</string>
     <string name="status_beta_hint">Battery and info use JBL\'s unofficial control protocol and may not work on every model.</string>
     <string name="action_read_all">Read battery of all speakers</string>
 
