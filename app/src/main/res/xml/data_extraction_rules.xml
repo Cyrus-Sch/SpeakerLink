@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and higher: back up and transfer the speaker preferences only. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="speakerlink.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="speakerlink.xml" />
+    </device-transfer>
+</data-extraction-rules>

@@ -145,6 +145,17 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
         }
     }
 
+    /** Listens for LE advertisements only (no classic discovery), e.g. to find a speaker's LE address. */
+    fun scanAdvertisements(durationMillis: Long = 8_000) {
+        if (adapter?.isEnabled != true || !BtPermissions.canScan(context)) return
+        bleScanner.start()
+        scanJob?.cancel()
+        scanJob = scope.launch {
+            delay(durationMillis)
+            stopScan()
+        }
+    }
+
     fun stopScan() {
         scanJob?.cancel()
         scanJob = null
@@ -335,7 +346,9 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
                 ?: matchByModel(devices.values, advert)
         }
         if (target != null) {
-            upsert(target) { it.copy(advertisement = advert, lastSeen = now, rssi = rssi) }
+            upsert(target) {
+                it.copy(advertisement = advert, lastSeen = now, rssi = rssi, bleAddress = bleAddress, bleSeenAt = now)
+            }
             _nearbyAdverts.update { it - bleAddress }
         } else {
             _nearbyAdverts.update { it + (bleAddress to NearbyAdvert(bleAddress, bleName, advert, now)) }
@@ -433,7 +446,9 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
                     device.address in advert.advertisement.classicAddressCandidates ||
                         (advert.name != null && record.name?.startsWith(advert.name, ignoreCase = true) == true)
                 }?.let { advert ->
-                    upsert(device.address) { it.copy(advertisement = advert.advertisement) }
+                    upsert(device.address) {
+                        it.copy(advertisement = advert.advertisement, bleAddress = advert.bleAddress, bleSeenAt = advert.lastSeen)
+                    }
                     _nearbyAdverts.update { it - advert.bleAddress }
                 }
             }

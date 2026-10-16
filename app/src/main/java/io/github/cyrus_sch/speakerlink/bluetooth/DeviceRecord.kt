@@ -44,6 +44,10 @@ data class DeviceRecord(
     /** SystemClock.elapsedRealtime() of the last discovery result, advertisement or link event. */
     val lastSeen: Long? = null,
     val advertisement: HarmanAdvertisement? = null,
+    /** Bluetooth LE address the speaker last advertised from (often a rotating random address). */
+    val bleAddress: String? = null,
+    /** SystemClock.elapsedRealtime() of the last LE advertisement. */
+    val bleSeenAt: Long? = null,
     /** SystemClock.elapsedRealtime() of a connect request the app is still waiting for. */
     val connectRequestedAt: Long? = null,
     /** The app asked to pair with this device and will connect it once bonding succeeds. */

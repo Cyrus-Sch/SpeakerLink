@@ -37,6 +37,8 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Reproducible builds (F-Droid): no git metadata in the APK.
+            vcsInfo.include = false
             if (releaseKeystore != null) {
                 signingConfig = signingConfigs.getByName("release")
             }

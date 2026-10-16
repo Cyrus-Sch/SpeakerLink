@@ -27,8 +27,15 @@
         android:name="android.hardware.bluetooth_le"
         android:required="false" />
 
-    <!-- Opening the Bluetooth / audio-sharing settings screens. -->
+    <!-- Opening the Bluetooth, output switcher and audio-sharing system screens. -->
     <queries>
+        <package android:name="com.android.systemui" />
+        <intent>
+            <action android:name="com.android.systemui.action.LAUNCH_MEDIA_OUTPUT_DIALOG" />
+        </intent>
+        <intent>
+            <action android:name="com.android.settings.panel.action.MEDIA_OUTPUT" />
+        </intent>
         <intent>
             <action android:name="android.settings.BLUETOOTH_SETTINGS" />
         </intent>
