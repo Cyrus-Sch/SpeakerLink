@@ -186,7 +186,8 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
     fun connect(address: String): Boolean {
         val device = device(address) ?: return false
         val proxy = a2dp ?: return false
-        if (adapter?.isDiscovering == true && BtPermissions.canScan(context)) runCatching { adapter.cancelDiscovery() }
+        // Discovery slows connections down considerably.
+        adapter?.takeIf { BtPermissions.canScan(context) && it.isDiscovering }?.let { runCatching { it.cancelDiscovery() } }
         return when (val result = HiddenBluetooth.connect(proxy, device)) {
             is HiddenCall.Done -> {
                 if (result.value) {

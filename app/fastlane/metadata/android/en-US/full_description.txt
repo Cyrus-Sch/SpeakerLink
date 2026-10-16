@@ -1,0 +1,24 @@
+<p>SpeakerLink helps you use several JBL Bluetooth speakers together.</p>
+
+<p><b>What it does</b></p>
+<ul>
+<li>Finds and pairs JBL speakers and recognises the model from its name or Bluetooth advertisement.</li>
+<li>Keeps several speakers connected at the same time and shows which one is playing.</li>
+<li>Moves the music to another connected speaker with one tap.</li>
+<li>Party planner: tells you which of your speakers can play together (PartyBoost, Auracast, Connect+ or PartyBox TWS), picks a host speaker and walks you through linking them.</li>
+<li>Warns when speakers of different generations can't be linked, and suggests alternatives such as Samsung Dual Audio or Android Audio sharing where your phone supports them.</li>
+<li>Test sound to check that every linked speaker plays.</li>
+<li>Battery level and firmware of many JBL portables (beta, uses JBL's unofficial control protocol).</li>
+</ul>
+
+<p><b>How playing on several speakers works</b></p>
+<p>Android sends music to one Bluetooth speaker at a time. JBL speakers solve this themselves: your phone streams to one speaker (the host) and the others receive the music from it over PartyBoost, Auracast or Connect+. SpeakerLink connects the host and shows you which buttons to press on which speaker. Speakers of different link systems (for example a Flip 6 with PartyBoost and a Flip 7 with Auracast) cannot join the same group, with the exception of the Xtreme 4.</p>
+
+<p><b>Notes</b></p>
+<ul>
+<li>Connecting speakers from inside the app uses Android Bluetooth functions that are not part of the public SDK. If your phone blocks them, SpeakerLink opens the system Bluetooth settings instead.</li>
+<li>Android 12 and higher asks for the "Nearby devices" permission. On Android 11 and lower, finding new devices requires the location permission. SpeakerLink never uses your location.</li>
+<li>No internet permission, no ads, no tracking.</li>
+</ul>
+
+<p>SpeakerLink is an independent open-source app. It is not affiliated with, endorsed or sponsored by JBL or HARMAN International. JBL, PartyBoost and Connect+ are trademarks of HARMAN International Industries, Incorporated. Auracast is a trademark of the Bluetooth SIG.</p>

@@ -1,0 +1,6 @@
+First release:
+- Find, pair and connect several JBL speakers at once
+- See which speaker is playing and switch with one tap
+- Party planner for PartyBoost, Auracast, Connect+ and PartyBox TWS
+- Test sound, output switcher and Audio sharing shortcuts
+- Battery and firmware of many JBL portables (beta)
