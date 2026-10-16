@@ -83,6 +83,11 @@ class SpeakerIdentifierTest {
         assertEquals("flip6", byPid.model?.id)
         assertEquals(IdentificationSource.ADVERTISEMENT, byPid.source)
 
+        // A product ID from another speaker nearby must not override a name that names a model.
+        val conflict = SpeakerIdentifier.identify("JBL Charge 4", advertisedPid = 0x20E3)
+        assertEquals("charge4", conflict.model?.id)
+        assertEquals(IdentificationSource.NAME, conflict.source)
+
         val byUser = SpeakerIdentifier.identify("JBL Flip 6", advertisedPid = 0x204F, userModelId = "charge5")
         assertEquals("charge5", byUser.model?.id)
         assertEquals(IdentificationSource.USER, byUser.source)

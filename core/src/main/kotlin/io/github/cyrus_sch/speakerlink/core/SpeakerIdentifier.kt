@@ -80,23 +80,22 @@ object SpeakerIdentifier {
     }
 
     /**
-     * Identifies a speaker. A model the user picked wins over the advertised product ID, which
-     * wins over the name (names can be changed by the user, product IDs cannot).
+     * Identifies a speaker. A model the user picked wins. Otherwise the name decides when it names
+     * a model (advertisements are tied to paired speakers partly by heuristics, so a conflicting
+     * product ID may belong to another speaker nearby); the advertised product ID covers renamed
+     * speakers whose name names no model.
      */
     fun identify(name: String?, advertisedPid: Int? = null, userModelId: String? = null): Identification {
         ModelCatalog.byId(userModelId)?.let {
             return Identification(it, IdentificationSource.USER, isJbl = true)
         }
+        val nameModel = modelFromName(name)?.takeIf { looksLikeJbl(name) }
+        if (nameModel != null) return Identification(nameModel, IdentificationSource.NAME, isJbl = true)
         ModelCatalog.byPid(advertisedPid)?.let {
             return Identification(it, IdentificationSource.ADVERTISEMENT, isJbl = true)
         }
         // Harman's company ID is shared with Harman Kardon and others, so an unknown product ID
         // alone does not make a device a JBL speaker.
-        val jblName = looksLikeJbl(name)
-        val fromName = modelFromName(name)
-        if (fromName != null && jblName) {
-            return Identification(fromName, IdentificationSource.NAME, isJbl = true)
-        }
-        return Identification(null, IdentificationSource.NONE, isJbl = jblName)
+        return Identification(null, IdentificationSource.NONE, isJbl = looksLikeJbl(name))
     }
 }

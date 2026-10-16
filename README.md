@@ -36,11 +36,12 @@ music on several speakers are:
 | Auracast | Flip 7, Charge 6, Go 4, Clip 5, Xtreme 4, Xtreme 5, Go 5, Boombox 4, PartyBox Club 120 / Stage 320 / 520 / 720 / Encore 2 / Encore Essential 2 (after firmware updates) |
 | PartyBoost | Flip 5, Flip 6, Charge 5, Pulse 4, Pulse 5, Xtreme 3, Xtreme 4, Boombox 2, Boombox 3 |
 | Connect+ | Flip 4, Charge 3 (after its update), Charge 4, Pulse 3, Xtreme 2, Boombox |
-| JBL Connect (2 speakers) | Flip 3, Pulse 2, Xtreme, Boost TV |
-| PartyBox TWS (2 boxes) | PartyBox 110 / 310 / 710 / 1000 / Encore / Encore Essential / On-The-Go, Club 120, Stage 320 |
-| PartyBox TWS, classic (2 boxes) | PartyBox 100 (with another 100), PartyBox 200 / 300 |
+| JBL Connect (2 speakers) | Flip 3, Pulse 2, Xtreme, Boost TV, Charge 3 (original firmware) |
+| PartyBox TWS (2 boxes) | PartyBox 110 / 310 / 710 / 1000 / Encore / Encore Essential, Club 120, Stage 320 (different models in JBL's PartyBox app); On-The-Go and On-The-Go Essential (only with each other) |
+| PartyBox TWS, classic (2 boxes) | PartyBox 100 (only with another 100), PartyBox 200 / 300 (with each other) |
 
-The Xtreme 4 joins both PartyBoost and Auracast groups (one at a time). Go 3, Clip 4 and older
+The Xtreme 4 joins both PartyBoost and Auracast groups (one at a time), and the Charge 3 links
+with JBL Connect speakers on its original firmware and with Connect+ after its update. Go 3, Clip 4 and older
 Go/Clip models cannot link. The catalog lives in
 [`core/src/main/kotlin/.../ModelCatalog.kt`](core/src/main/kotlin/io/github/cyrus_sch/speakerlink/core/ModelCatalog.kt).
 

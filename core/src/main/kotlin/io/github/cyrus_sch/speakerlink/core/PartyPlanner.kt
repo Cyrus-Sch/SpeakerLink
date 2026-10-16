@@ -10,6 +10,8 @@ data class PlannerSpeaker(
     val connectedToPhone: Boolean = false,
     /** The phone is currently sending its media audio to this speaker. */
     val playing: Boolean = false,
+    /** The speaker was seen recently (connected, advertising or found by a scan). */
+    val present: Boolean = true,
 )
 
 /** Why a speaker cannot be part of any group in the plan. */
@@ -25,6 +27,9 @@ enum class ExclusionReason {
 
     /** No other selected speaker uses a compatible linking family. */
     NO_PARTNER,
+
+    /** Others use the same family, but this model links only with specific models (e.g. PartyBox 100). */
+    INCOMPATIBLE_MODEL,
 
     /** The group for this family is already at its maximum size. */
     GROUP_FULL,
@@ -51,6 +56,9 @@ sealed interface LinkStep {
     /** Press the family's button on every other speaker, within about 30 seconds. */
     data class PressOnMembers(val family: LinkFamily, val members: List<PlannerSpeaker>) : LinkStep
 
+    /** Different PartyBox models: link them in Party mode from JBL's PartyBox app. */
+    data class LinkInPartyBoxApp(val host: PlannerSpeaker, val members: List<PlannerSpeaker>) : LinkStep
+
     /** Choose Party or Stereo mode (Stereo only when [stereoPossible]). */
     data class ChooseMode(val family: LinkFamily, val stereoPossible: Boolean) : LinkStep
 
@@ -73,7 +81,7 @@ data class LinkGroup(
     /** The other speakers, without the host. */
     val members: List<PlannerSpeaker>,
     val steps: List<LinkStep>,
-    /** Exactly two speakers of the same model in a family that supports left/right stereo. */
+    /** Exactly two speakers that can form a left/right stereo pair (normally the same model). */
     val stereoPairPossible: Boolean,
     val notes: Set<GroupNote>,
 ) {
@@ -110,9 +118,10 @@ data class PartyPlan(
     /** True when every selected speaker can play together in a single group. */
     val everyoneInOneGroup: Boolean get() = groups.size == 1 && excluded.isEmpty()
 
-    /** True when the selection mixes linking families that cannot talk to each other. */
+    /** True when the selection mixes speakers that cannot all be linked to each other. */
     val mixesFamilies: Boolean
-        get() = (groups.map { it.family } + excluded.mapNotNull { it.family }).distinct().size > 1
+        get() = excluded.any { it.reason == ExclusionReason.INCOMPATIBLE_MODEL } ||
+            (groups.map { it.family } + excluded.mapNotNull { it.family }).distinct().size > 1
 }
 
 /**
@@ -149,14 +158,21 @@ object PartyPlanner {
         for ((key, members) in buckets) {
             val family = key.family
             if (members.size < 2) {
-                excluded += members.map { ExcludedSpeaker(it, ExclusionReason.NO_PARTNER, family) }
+                val sameFamilyElsewhere = buckets.keys.any { it != key && it.family == family }
+                val reason = if (sameFamilyElsewhere) ExclusionReason.INCOMPATIBLE_MODEL else ExclusionReason.NO_PARTNER
+                excluded += members.map { ExcludedSpeaker(it, reason, family) }
                 continue
             }
             val ordered = orderForHost(members, preferredHostKey)
-            val limit = family.maxSpeakers ?: Int.MAX_VALUE
-            val inGroup = ordered.take(limit)
-            excluded += ordered.drop(limit).map { ExcludedSpeaker(it, ExclusionReason.GROUP_FULL, family) }
-            groups += buildGroup(family, inGroup, multiFamily = inGroup.any { it.model!!.families.size > 1 })
+            // Families with a size limit (two speakers) can still form several separate groups.
+            val chunks = ordered.chunked(family.maxSpeakers ?: ordered.size)
+            for (chunk in chunks) {
+                if (chunk.size < 2) {
+                    excluded += chunk.map { ExcludedSpeaker(it, ExclusionReason.GROUP_FULL, family) }
+                } else {
+                    groups += buildGroup(family, key.subgroup, chunk)
+                }
+            }
         }
 
         groups.sortWith(
@@ -173,9 +189,9 @@ object PartyPlanner {
     }
 
     /**
-     * Gives each speaker one family. Speakers with a single family keep it; speakers with several
-     * (Xtreme 4, PartyBox Club 120 / Stage 320) join the family that already has the most
-     * speakers, newest family on ties.
+     * Gives each speaker one family. Speakers with a single family keep it. Speakers with several
+     * (Xtreme 4, Charge 3, PartyBox Club 120 / Stage 320) join a family that still has room, then
+     * the one with the most speakers, then the newest.
      */
     private fun assignFamilies(linkable: List<PlannerSpeaker>): Map<String, LinkFamily> {
         val result = LinkedHashMap<String, LinkFamily>()
@@ -188,7 +204,9 @@ object PartyPlanner {
         }
         for (speaker in multi) {
             val family = speaker.model!!.families.maxWith(
-                compareBy<LinkFamily> { counts[it] ?: 0 }.thenBy { it.generation },
+                compareBy<LinkFamily> { f -> f.maxSpeakers == null || (counts[f] ?: 0) < f.maxSpeakers }
+                    .thenBy { counts[it] ?: 0 }
+                    .thenBy { it.generation },
             )
             result[speaker.key] = family
             counts[family] = (counts[family] ?: 0) + 1
@@ -196,50 +214,65 @@ object PartyPlanner {
         return result
     }
 
-    private data class BucketKey(val family: LinkFamily, val subgroup: String)
+    private data class BucketKey(val family: LinkFamily, val subgroup: Subgroup)
 
-    /**
-     * PartyBox 100 only links with another PartyBox 100, while the PartyBox 200 and 300 link with
-     * each other, so the classic TWS family is split into two buckets.
-     */
+    /** Models within a family that only link with each other. */
+    private enum class Subgroup { ANY, PARTYBOX_100, PARTYBOX_200_300, PARTYBOX_ON_THE_GO, PARTYBOX_APP }
+
+    private val onTheGo = setOf("partyboxonthego", "partyboxonthegoessential")
+
     private fun bucketKey(speaker: PlannerSpeaker, family: LinkFamily): BucketKey {
-        val subgroup = if (family == LinkFamily.PARTYBOX_TWS_CLASSIC) {
-            if (speaker.model!!.id == "partybox100") "100" else "200-300"
-        } else {
-            ""
+        val id = speaker.model!!.id
+        val subgroup = when (family) {
+            LinkFamily.PARTYBOX_TWS_CLASSIC -> if (id == "partybox100") Subgroup.PARTYBOX_100 else Subgroup.PARTYBOX_200_300
+            LinkFamily.PARTYBOX_TWS -> if (id in onTheGo) Subgroup.PARTYBOX_ON_THE_GO else Subgroup.PARTYBOX_APP
+            else -> Subgroup.ANY
         }
         return BucketKey(family, subgroup)
     }
 
-    /** Host first: the user's choice, then the speaker playing, then one already connected. */
+    /**
+     * Host first: the user's choice (if that speaker is around), then the speaker playing, then
+     * one already connected, then one that is around.
+     */
     private fun orderForHost(members: List<PlannerSpeaker>, preferredHostKey: String?): List<PlannerSpeaker> {
-        val host = members.firstOrNull { it.key == preferredHostKey }
+        val host = members.firstOrNull { it.key == preferredHostKey && (it.present || it.connectedToPhone) }
             ?: members.firstOrNull { it.playing }
             ?: members.firstOrNull { it.connectedToPhone }
+            ?: members.firstOrNull { it.present }
             ?: members.first()
         return listOf(host) + members.filter { it.key != host.key }
     }
 
-    private fun buildGroup(family: LinkFamily, speakers: List<PlannerSpeaker>, multiFamily: Boolean): LinkGroup {
+    /** Two PartyBox 200/300 or two On-The-Go models also form TWS stereo pairs. */
+    private fun stereoCompatible(a: SpeakerModel, b: SpeakerModel): Boolean =
+        a.id == b.id ||
+            setOf(a.id, b.id) == setOf("partybox200", "partybox300") ||
+            (a.id in onTheGo && b.id in onTheGo)
+
+    private fun buildGroup(family: LinkFamily, subgroup: Subgroup, speakers: List<PlannerSpeaker>): LinkGroup {
         val host = speakers.first()
         val members = speakers.drop(1)
-        val stereo = family.supportsStereoPair &&
-            speakers.size == 2 &&
-            speakers[0].model!!.id == speakers[1].model!!.id
+        val models = speakers.map { it.model!! }
+        val stereo = family.supportsStereoPair && speakers.size == 2 && stereoCompatible(models[0], models[1])
+        val mixedPartyBoxes = subgroup == Subgroup.PARTYBOX_APP && models.distinctBy { it.id }.size > 1
 
         val steps = buildList {
             add(LinkStep.PowerOnAndGather)
             add(LinkStep.ConnectPhoneToHost(host))
-            add(LinkStep.PressOnHost(family, host))
-            add(LinkStep.PressOnMembers(family, members))
+            if (mixedPartyBoxes) {
+                add(LinkStep.LinkInPartyBoxApp(host, members))
+            } else {
+                add(LinkStep.PressOnHost(family, host))
+                add(LinkStep.PressOnMembers(family, members))
+            }
             if (family.supportsStereoPair) add(LinkStep.ChooseMode(family, stereo))
             add(LinkStep.PlayMusic)
         }
 
-        val models = speakers.mapNotNull { it.model }
         val notes = buildSet {
             if (models.any { it.note == ModelNote.CONNECT_PLUS_AFTER_FIRMWARE_UPDATE }) add(GroupNote.CHARGE_3_NEEDS_FIRMWARE_UPDATE)
-            if (multiFamily) add(GroupNote.MULTI_FAMILY_SPEAKER)
+            if (models.any { it.families.size > 1 }) add(GroupNote.MULTI_FAMILY_SPEAKER)
             if (models.any { it.note == ModelNote.AURACAST_AFTER_FIRMWARE_UPDATE }) add(GroupNote.PARTYBOX_NEEDS_FIRMWARE_UPDATE)
             if (models.any { it.confidence == Confidence.UNVERIFIED }) add(GroupNote.CONTAINS_UNVERIFIED_MODEL)
         }

@@ -113,12 +113,13 @@
     <string name="step_press_members">Within about 30 seconds, press the %1$s button on %2$s.</string>
     <string name="step_press_host_tws_classic">Start TWS pairing on %1$s as described in its manual.</string>
     <string name="step_press_members_tws_classic">Then start TWS pairing on %1$s.</string>
-    <string name="step_mode_stereo">Both speakers are the same model, so you can choose Stereo (left and right) instead of Party mode in JBL\'s app.</string>
+    <string name="step_link_in_partybox_app">Open JBL\'s PartyBox app and link %1$s with %2$s in Party mode.</string>
+    <string name="step_mode_stereo">These two speakers can also play as a stereo pair (left and right) instead of Party mode, set in JBL\'s app.</string>
     <string name="step_mode_party">All speakers play the same music (Party mode). Stereo needs exactly two speakers of the same model.</string>
     <string name="step_play">Play music on your phone. Every speaker in the group plays it.</string>
     <string name="action_connect_host">Connect host</string>
     <string name="host_connected">Host connected</string>
-    <string name="note_charge3">The Charge 3 links with Connect+ speakers only after its firmware update.</string>
+    <string name="note_charge3">The Charge 3 uses JBL Connect on its original firmware and Connect+ after its firmware update, so it links with only one of the two generations.</string>
     <string name="note_multi_family">A speaker here supports two link systems (Xtreme 4, PartyBox Club 120 or Stage 320). It was put in this group and can be in only one group at a time.</string>
     <string name="note_partybox_firmware">Newer PartyBoxes get Auracast and linking with other speakers through firmware updates in JBL\'s PartyBox app.</string>
     <string name="note_unverified">Linking support of at least one model here is not confirmed.</string>
@@ -128,6 +129,7 @@
     <string name="excluded_linking_unknown">It\'s unclear whether this model can link with other speakers.</string>
     <string name="excluded_no_linking">This model can\'t link with other speakers.</string>
     <string name="excluded_no_partner">No other selected speaker uses %1$s.</string>
+    <string name="excluded_incompatible_model">Other speakers use %1$s too, but this model links only with certain models. See the list on the Info tab.</string>
     <string name="excluded_group_full">The %1$s group is full (at most %2$d speakers).</string>
     <string name="party_test_sound_hint">Tip: play the test sound. Every linked speaker should chime.</string>
     <string name="alternatives_title">Other ways to use several speakers</string>

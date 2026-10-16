@@ -354,9 +354,9 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
 
     /** Copies name, class and sink capability from the framework object into a record. */
     private fun describe(device: BluetoothDevice, old: DeviceRecord?, nameHint: String? = null, classHint: BluetoothClass? = null): DeviceRecord {
+        val remoteName = runCatching { device.name }.getOrNull() ?: nameHint ?: old?.remoteName
         val name = runCatching { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) device.alias else null }.getOrNull()
-            ?: runCatching { device.name }.getOrNull()
-            ?: nameHint
+            ?: remoteName
             ?: old?.name
         val btClass = classHint ?: runCatching { device.bluetoothClass }.getOrNull()
         val uuids = runCatching { device.uuids }.getOrNull()
@@ -367,6 +367,7 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
         val base = old ?: DeviceRecord(address = device.address, name = name)
         return base.copy(
             name = name,
+            remoteName = remoteName,
             majorClass = btClass?.majorDeviceClass ?: base.majorClass,
             deviceClass = btClass?.deviceClass ?: base.deviceClass,
             audioSink = sink || base.audioSink,
@@ -392,7 +393,7 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
         }
         // An advert that names a classic address we do not know belongs to someone else's speaker.
         val target = exact ?: if (advert.classicAddressCandidates.isEmpty()) {
-            matchByName(devices.values, bleName) ?: matchByModel(devices.values, advert)
+            matchByName(devices.values, bleName, advert) ?: matchByModel(devices.values, advert)
         } else {
             null
         }
@@ -422,15 +423,23 @@ class SpeakerBluetooth(private val context: Context, private val scope: Coroutin
         if (_nearbyAdverts.value.containsKey(bleAddress)) _nearbyAdverts.update { it - bleAddress }
     }
 
-    /** LE names are often truncated ("JBL Fli"); only a single paired speaker may match. */
-    private fun matchByName(devices: Collection<DeviceRecord>, bleName: String?): String? =
-        devices.singleOrNull { it.bonded && SpeakerIdentifier.sameSpeakerName(it.name, bleName) }?.address
+    /**
+     * LE names are often truncated ("JBL Fli"); only a single paired speaker may match, and not
+     * one whose name says it is a different model than the advertisement.
+     */
+    private fun matchByName(devices: Collection<DeviceRecord>, bleName: String?, advert: HarmanAdvertisement): String? =
+        devices.singleOrNull { record ->
+            val nameMatches = SpeakerIdentifier.sameSpeakerName(record.remoteName, bleName) ||
+                SpeakerIdentifier.sameSpeakerName(record.name, bleName)
+            val nameModel = SpeakerIdentifier.modelFromName(record.remoteName) ?: SpeakerIdentifier.modelFromName(record.name)
+            record.bonded && nameMatches && (advert.model == null || nameModel == null || nameModel == advert.model)
+        }?.address
 
     /** Last resort: exactly one paired speaker of the advertised model. */
     private fun matchByModel(devices: Collection<DeviceRecord>, advert: HarmanAdvertisement): String? {
         val model = advert.model ?: return null
         return devices.singleOrNull { record ->
-            record.bonded && SpeakerIdentifier.modelFromName(record.name) == model
+            record.bonded && (SpeakerIdentifier.modelFromName(record.remoteName) ?: SpeakerIdentifier.modelFromName(record.name)) == model
         }?.address
     }
 

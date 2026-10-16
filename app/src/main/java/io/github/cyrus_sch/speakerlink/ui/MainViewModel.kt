@@ -15,6 +15,7 @@ import io.github.cyrus_sch.speakerlink.bluetooth.HiddenBluetooth
 import io.github.cyrus_sch.speakerlink.bluetooth.LinkState
 import io.github.cyrus_sch.speakerlink.bluetooth.NearbyAdvert
 import io.github.cyrus_sch.speakerlink.core.ControlProtocol
+import io.github.cyrus_sch.speakerlink.core.Identification
 import io.github.cyrus_sch.speakerlink.core.IdentificationSource
 import io.github.cyrus_sch.speakerlink.core.PartyPlan
 import io.github.cyrus_sch.speakerlink.core.PartyPlanner
@@ -294,8 +295,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ------------------------------------------------------------------ state
 
-    private fun identify(record: DeviceRecord, prefs: Preferences) =
-        SpeakerIdentifier.identify(record.name, record.advertisement?.pid, prefs.modelOverrides[record.address])
+    /** Tries the device's own name first (it survives a local rename), then the display name. */
+    private fun identify(record: DeviceRecord, prefs: Preferences): Identification {
+        val pid = record.advertisement?.pid
+        val override = prefs.modelOverrides[record.address]
+        val byRemote = SpeakerIdentifier.identify(record.remoteName, pid, override)
+        if (byRemote.model != null) return byRemote
+        val byName = SpeakerIdentifier.identify(record.name, pid, override)
+        if (byName.model != null) return byName
+        return byRemote.copy(isJbl = byRemote.isJbl || byName.isJbl)
+    }
 
     private fun build(bt: BluetoothSnapshot, env: Environment, caps: DeviceCapabilities, max: Int?): UiState {
         val outputs = env.outputs
@@ -318,7 +327,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 name = record.name ?: record.address,
                 model = model,
                 modelSource = identification.source,
-                isJbl = identification.isJbl && !record.isHeadphones,
+                // Some speakers with a speakerphone report a headset device class; a known model wins.
+                isJbl = identification.isJbl && (model != null || !record.isHeadphones),
                 bonded = record.bonded,
                 bonding = record.bonding,
                 link = record.link,
@@ -358,8 +368,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .sorted()
 
         val partySpeakers = speakers.filter { it.isJbl && it.inParty }
+        // Speakers keep their default names ("JBL Flip 6" twice), so add the end of the address.
+        val duplicateNames = partySpeakers.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
         val plan = PartyPlanner.plan(
-            partySpeakers.map { PlannerSpeaker(it.address, it.name, it.model, connectedToPhone = it.connected, playing = it.playing) },
+            partySpeakers.map {
+                PlannerSpeaker(
+                    key = it.address,
+                    name = if (it.name in duplicateNames) "${it.name} (${it.address.takeLast(5)})" else it.name,
+                    model = it.model,
+                    connectedToPhone = it.connected,
+                    playing = it.playing,
+                    present = it.nearby,
+                )
+            },
             caps.forPlanner(),
             env.prefs.preferredHost,
         )

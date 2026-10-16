@@ -53,6 +53,7 @@ fun LinkStep.text(): String = when (this) {
     is LinkStep.PressOnMembers ->
         if (family == LinkFamily.PARTYBOX_TWS_CLASSIC) stringResource(R.string.step_press_members_tws_classic, names(members))
         else stringResource(R.string.step_press_members, family.buttonName, names(members))
+    is LinkStep.LinkInPartyBoxApp -> stringResource(R.string.step_link_in_partybox_app, host.name, names(members))
     is LinkStep.ChooseMode ->
         if (stereoPossible) stringResource(R.string.step_mode_stereo) else stringResource(R.string.step_mode_party)
     LinkStep.PlayMusic -> stringResource(R.string.step_play)
@@ -74,6 +75,7 @@ fun ExcludedSpeaker.text(): String {
         ExclusionReason.LINKING_UNKNOWN -> stringResource(R.string.excluded_linking_unknown)
         ExclusionReason.NO_LINKING -> stringResource(R.string.excluded_no_linking)
         ExclusionReason.NO_PARTNER -> stringResource(R.string.excluded_no_partner, family)
+        ExclusionReason.INCOMPATIBLE_MODEL -> stringResource(R.string.excluded_incompatible_model, family)
         ExclusionReason.GROUP_FULL -> stringResource(R.string.excluded_group_full, family, this.family?.maxSpeakers ?: 0)
     }
 }

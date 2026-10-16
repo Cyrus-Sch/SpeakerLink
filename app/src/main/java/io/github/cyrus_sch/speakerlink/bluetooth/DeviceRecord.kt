@@ -29,7 +29,10 @@ enum class LinkState {
 /** Everything the app knows about one Bluetooth device, keyed by its classic address. */
 data class DeviceRecord(
     val address: String,
+    /** Display name: the phone-local alias if the user renamed the device, else its own name. */
     val name: String?,
+    /** The name the device itself reports; used to recognise the model after a local rename. */
+    val remoteName: String? = null,
     val bondState: Int = BluetoothDevice.BOND_NONE,
     val link: LinkState = LinkState.DISCONNECTED,
     /** The speaker reports that A2DP audio is streaming to it. */

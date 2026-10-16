@@ -62,7 +62,7 @@ object ModelCatalog {
         // --- Connect+ ---
         m("flip4", "Flip 4", setOf(CONNECT_PLUS), setOf(0x1ED1, 0x1F24), """\bflip 4\b""", control = AA_BLE),
         m(
-            "charge3", "Charge 3", setOf(CONNECT_PLUS), setOf(0x1EBC, 0x1F25), """\bcharge 3\b""",
+            "charge3", "Charge 3", setOf(CONNECT, CONNECT_PLUS), setOf(0x1EBC, 0x1F25), """\bcharge 3\b""",
             control = AA_BLE, note = ModelNote.CONNECT_PLUS_AFTER_FIRMWARE_UPDATE,
         ),
         m("charge4", "Charge 4", setOf(CONNECT_PLUS), setOf(0x1F17, 0x1F29), """\bcharge 4\b""", control = AA_BLE),
