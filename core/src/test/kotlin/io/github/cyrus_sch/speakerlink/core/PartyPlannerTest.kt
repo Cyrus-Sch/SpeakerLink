@@ -179,6 +179,58 @@ class PartyPlannerTest {
     }
 
     @Test
+    fun thePlayingOrChosenSpeakerIsNeverTheOneLeftOver() {
+        val first = speaker("partybox310")
+        val second = speaker("partybox310")
+        val playing = speaker("partybox310", playing = true)
+        val plan = PartyPlanner.plan(listOf(first, second, playing))
+        assertEquals(playing, plan.best!!.host)
+        assertEquals(ExclusionReason.GROUP_FULL, plan.excluded.single().reason)
+
+        val idle = playing.copy(playing = false, connectedToPhone = false)
+        val chosen = PartyPlanner.plan(listOf(first, second, idle), preferredHostKey = idle.key)
+        assertEquals(idle, chosen.best!!.host)
+    }
+
+    @Test
+    fun multiFamilySpeakersDoNotBreakUpFullPairs() {
+        val club = speaker("partyboxclub120")
+        val box1 = speaker("partybox110")
+        val box2 = speaker("partybox110")
+        val plan = PartyPlanner.plan(listOf(club, box1, box2))
+        val pair = plan.groups.single()
+        assertEquals(setOf(box1, box2), pair.speakers.toSet())
+        assertTrue(pair.stereoPairPossible)
+        assertEquals(ExcludedSpeaker(club, ExclusionReason.NO_PARTNER, LinkFamily.AURACAST), plan.excluded.single())
+
+        val twoClubs = PartyPlanner.plan(listOf(speaker("partyboxclub120"), speaker("partybox110"), speaker("partyboxclub120"), speaker("partybox110")))
+        assertEquals(setOf(LinkFamily.AURACAST, LinkFamily.PARTYBOX_TWS), twoClubs.groups.map { it.family }.toSet())
+        assertTrue(twoClubs.groups.all { it.stereoPairPossible })
+
+        val charges = PartyPlanner.plan(List(3) { speaker("charge3") } + List(2) { speaker("flip3") })
+        assertTrue(charges.excluded.isEmpty())
+        assertEquals(listOf(LinkFamily.CONNECT_PLUS, LinkFamily.CONNECT), charges.groups.map { it.family })
+    }
+
+    @Test
+    fun sameModelsArePairedForStereo() {
+        val plan = PartyPlanner.plan(listOf(speaker("partybox110"), speaker("partybox310"), speaker("partybox110"), speaker("partybox310")))
+        assertEquals(2, plan.groups.size)
+        assertTrue(plan.groups.all { group -> group.stereoPairPossible && group.speakers.map { it.model }.distinct().size == 1 })
+    }
+
+    @Test
+    fun multiFamilyChoiceDoesNotDependOnWhichSpeakerPlays() {
+        val xtreme4 = speaker("xtreme4")
+        val club = speaker("partyboxclub120")
+        val flip6 = speaker("flip6")
+        fun groups(plan: PartyPlan) = plan.groups.map { group -> group.family to group.speakers.map { it.key }.toSet() }.toSet()
+        val idle = PartyPlanner.plan(listOf(club, xtreme4, flip6))
+        val playing = PartyPlanner.plan(listOf(xtreme4.copy(playing = true, connectedToPhone = true), club, flip6))
+        assertEquals(groups(idle), groups(playing))
+    }
+
+    @Test
     fun legacyConnectIsLimitedToTwoSpeakers() {
         val plan = PartyPlanner.plan(listOf(speaker("flip3"), speaker("flip3"), speaker("pulse2")))
         assertEquals(2, plan.best!!.size)

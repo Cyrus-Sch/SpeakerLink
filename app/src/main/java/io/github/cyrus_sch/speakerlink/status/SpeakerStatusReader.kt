@@ -123,8 +123,7 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
             val status = mutex.withLock {
                 execute(
                     targets,
-                    listOf(JblProtocol.requestSpeakerInfo(), JblProtocol.requestFirmware()),
-                    INFO_COLLECT_MILLIS,
+                    listOf(Request(JblProtocol.requestSpeakerInfo(), INFO_COLLECT_MILLIS), Request(JblProtocol.requestFirmware(), INFO_COLLECT_MILLIS)),
                     expectedNames,
                     expectInfo = true,
                 )
@@ -147,12 +146,13 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
 
     /**
      * Plays the speaker's "find me" sound. Only failures are reported through [statuses], and
-     * never over a read that is still running. [expectedNames] works as in [read].
+     * never over a read that is still running. On targets with [GattTarget.verifyName] the
+     * speaker's name is read and checked against [expectedNames] before the sound is played.
      */
     fun playLocateSound(key: String, targets: List<GattTarget>, expectedNames: List<String>) {
         scope.launch {
             val status = mutex.withLock {
-                execute(targets, listOf(JblProtocol.playSound()), 400, expectedNames, expectInfo = false)
+                execute(targets, listOf(Request(JblProtocol.playSound(), LOCATE_COLLECT_MILLIS)), expectedNames, expectInfo = false)
             }
             if (status is SpeakerStatus.Failed) {
                 _statuses.update { current -> if (current[key] is SpeakerStatus.Reading) current else current + (key to status) }
@@ -160,10 +160,12 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         }
     }
 
+    /** A command and how long to collect its answers. */
+    private class Request(val bytes: ByteArray, val collectMillis: Long)
+
     private suspend fun execute(
         targets: List<GattTarget>,
-        commands: List<ByteArray>,
-        collectMillis: Long,
+        requests: List<Request>,
         expectedNames: List<String>,
         expectInfo: Boolean,
     ): SpeakerStatus {
@@ -173,17 +175,25 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
             if (reason > failure) failure = reason
         }
         for (target in targets.distinct()) {
+            // An address matched by heuristics may belong to someone else's speaker of the same model.
+            val accepts: (SpeakerInfo) -> Boolean = { info ->
+                val name = info.name
+                !target.verifyName || name == null || expectedNames.any { SpeakerIdentifier.sameSpeakerName(it, name) }
+            }
+            // Before a command with an effect (the locate sound), ask for the name to check it.
+            val steps = if (target.verifyName && !expectInfo) {
+                listOf(Request(JblProtocol.requestSpeakerInfo(), INFO_COLLECT_MILLIS)) + requests
+            } else {
+                requests
+            }
             var attempt = 0
             while (attempt < 2) {
                 attempt++
-                when (val outcome = session(target, commands, collectMillis, expectInfo)) {
-                    is Outcome.Success -> {
-                        val name = outcome.info.name
-                        if (target.verifyName && name != null && expectedNames.none { SpeakerIdentifier.sameSpeakerName(it, name) }) {
-                            Log.i(TAG, "Ignoring reply from \"$name\" while looking for $expectedNames")
-                            break // someone else's speaker: try the next target
-                        }
-                        return SpeakerStatus.Ready(outcome.info, SystemClock.elapsedRealtime())
+                when (val outcome = session(target, steps, expectInfo, accepts)) {
+                    is Outcome.Success -> return SpeakerStatus.Ready(outcome.info, SystemClock.elapsedRealtime())
+                    is Outcome.WrongSpeaker -> {
+                        Log.i(TAG, "Ignoring \"${outcome.name}\" while looking for $expectedNames")
+                        break // try the next target
                     }
                     // A fresh connection often fails at once with status 133; one retry usually helps.
                     Outcome.FastFailure, Outcome.NotSent -> delay(RETRY_DELAY_MILLIS)
@@ -215,6 +225,9 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
 
         /** Connected, but no command could be written. */
         data object NotSent : Outcome
+
+        /** The speaker at this address named itself as a different speaker. */
+        data class WrongSpeaker(val name: String?) : Outcome
     }
 
     private sealed interface Event {
@@ -229,7 +242,12 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
     /** Thrown inside a session when the link drops. */
     private class Disconnected : Exception()
 
-    private suspend fun session(target: GattTarget, commands: List<ByteArray>, collectMillis: Long, expectInfo: Boolean): Outcome {
+    private suspend fun session(
+        target: GattTarget,
+        requests: List<Request>,
+        expectInfo: Boolean,
+        accepts: (SpeakerInfo) -> Boolean,
+    ): Outcome {
         val device = remoteDevice(target) ?: return Outcome.FastFailure
         val events = Channel<Event>(Channel.UNLIMITED)
         val callback = object : BluetoothGattCallback() {
@@ -276,7 +294,7 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         var info = SpeakerInfo()
         var framesSeen = 0
         var unsupported = false
-        // The speaker received at least one command (write confirmed, or accepted without response).
+        // The speaker received the last command (write confirmed, or accepted without response).
         var delivered = false
         fun consume(event: Event) {
             if (event !is Event.Notification) return
@@ -340,19 +358,24 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
             }
 
             var written = 0
-            for (command in commands) {
+            var lastSent = false
+            for ((index, request) in requests.withIndex()) {
+                // Answers so far came from another speaker: send nothing more.
+                if (!accepts(info)) return Outcome.WrongSpeaker(info.name)
                 // A partial frame left over from the previous answer must not swallow this one.
                 if (decoder.hasPartialFrame) decoder.reset()
-                var sent = writeCharacteristic(gatt, write, command, writeType)
+                var sent = writeCharacteristic(gatt, write, request.bytes, writeType)
                 if (!sent) {
                     delay(300) // the stack may still be busy with the previous operation
-                    sent = writeCharacteristic(gatt, write, command, writeType)
+                    sent = writeCharacteristic(gatt, write, request.bytes, writeType)
                 }
+                lastSent = sent
                 if (!sent) continue
                 written++
-                if (!withResponse || await(1_500) { it is Event.CharacteristicWritten } != null) delivered = true
+                val confirmed = !withResponse || await(1_500) { it is Event.CharacteristicWritten } != null
+                if (index == requests.lastIndex && confirmed) delivered = true
                 // Collect the answers; stop early once the speaker goes quiet.
-                val deadline = SystemClock.elapsedRealtime() + collectMillis
+                val deadline = SystemClock.elapsedRealtime() + request.collectMillis
                 var quietUntil = deadline
                 while (true) {
                     val now = SystemClock.elapsedRealtime()
@@ -367,17 +390,19 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
                 }
             }
             return when {
+                !accepts(info) -> Outcome.WrongSpeaker(info.name)
                 written == 0 -> Outcome.NotSent
-                !expectInfo -> Outcome.Success(info)
+                !expectInfo -> if (lastSent) Outcome.Success(info) else Outcome.NotSent
                 !info.isEmpty -> Outcome.Success(info)
                 unsupported -> Outcome.NoService
                 else -> Outcome.NoResponse
             }
         } catch (e: Disconnected) {
             return when {
+                !accepts(info) -> Outcome.WrongSpeaker(info.name)
                 // Some speakers drop the link right after the locate sound; it was played.
                 !expectInfo && delivered -> Outcome.Success(info)
-                framesSeen > 0 && !info.isEmpty -> Outcome.Success(info)
+                expectInfo && framesSeen > 0 && !info.isEmpty -> Outcome.Success(info)
                 else -> Outcome.FastFailure
             }
         } catch (e: SecurityException) {
@@ -434,6 +459,7 @@ class SpeakerStatusReader(private val context: Context, private val scope: Corou
         const val CONNECT_TIMEOUT_MILLIS = 10_000L
         const val RETRY_DELAY_MILLIS = 600L
         const val INFO_COLLECT_MILLIS = 2_500L
+        const val LOCATE_COLLECT_MILLIS = 400L
         const val QUIET_MILLIS = 700L
     }
 }

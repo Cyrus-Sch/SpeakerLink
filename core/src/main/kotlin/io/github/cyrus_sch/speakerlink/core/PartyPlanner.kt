@@ -163,10 +163,8 @@ object PartyPlanner {
                 excluded += members.map { ExcludedSpeaker(it, reason, family) }
                 continue
             }
-            // Families with a size limit (two speakers) can still form several separate groups. The
-            // split uses a stable order, so pairs do not change when another speaker starts playing.
-            val stable = members.sortedWith(compareByDescending<PlannerSpeaker> { it.present }.thenBy { it.key })
-            for (chunk in stable.chunked(family.maxSpeakers ?: stable.size)) {
+            // Families with a size limit (two speakers) can still form several separate groups.
+            for (chunk in split(members, family.maxSpeakers, preferredHostKey)) {
                 if (chunk.size < 2) {
                     excluded += chunk.map { ExcludedSpeaker(it, ExclusionReason.GROUP_FULL, family) }
                 } else {
@@ -191,8 +189,9 @@ object PartyPlanner {
     /**
      * Gives each speaker one family. Speakers with a single family keep it. Speakers with several
      * (Xtreme 4, Charge 3, PartyBox Club 120 / Stage 320) prefer a family where they complete or
-     * join a group (speakers they can actually link with, and room left), then the one with the
-     * most such speakers, then the newest.
+     * join a group (speakers they can actually link with, and room left), then an empty family
+     * over one whose groups are all full, then the one with the most speakers, then the newest.
+     * They are assigned in a fixed order, so the result does not change when another speaker plays.
      */
     private fun assignFamilies(linkable: List<PlannerSpeaker>): Map<String, LinkFamily> {
         val result = LinkedHashMap<String, LinkFamily>()
@@ -204,20 +203,84 @@ object PartyPlanner {
         }
         val (single, multi) = linkable.partition { it.model!!.families.size == 1 }
         for (speaker in single) assign(speaker, speaker.model!!.families.single())
-        for (speaker in multi) {
+        for (speaker in multi.sortedWith(stableOrder)) {
             fun count(family: LinkFamily) = counts[bucketKey(speaker, family)] ?: 0
-            val family = speaker.model!!.families.maxWith(
-                compareBy<LinkFamily> { f ->
-                    val max = f.maxSpeakers
-                    // Unlimited: anyone to link with. Limited: a group that is waiting for a partner.
-                    if (max == null) count(f) >= 1 else count(f) % max != 0
+            fun fit(family: LinkFamily): Int {
+                val count = count(family)
+                val max = family.maxSpeakers
+                // Someone to link with and room left (for a limited family: a group waiting for a partner).
+                val joins = if (max == null) count >= 1 else count % max != 0
+                return when {
+                    joins -> 2
+                    count == 0 -> 1
+                    else -> 0 // every group of this family is already full
                 }
+            }
+            val family = speaker.model!!.families.maxWith(
+                compareBy<LinkFamily> { fit(it) }
                     .thenBy { count(it) }
                     .thenBy { it.generation },
             )
             assign(speaker, family)
         }
         return result
+    }
+
+    /** An order that does not depend on playback state: speakers around first, same models together. */
+    private val stableOrder = compareByDescending<PlannerSpeaker> { it.present }
+        .thenBy { it.model?.id }
+        .thenBy { it.key }
+
+    /**
+     * Splits one bucket into groups of at most [max] speakers. The split is stable, so groups do
+     * not change when another speaker starts playing. Pairs of the same model (which can play in
+     * stereo with the speakers' own buttons) are formed first. The speaker that should host (the
+     * user's choice, or the one playing or connected) is never the one left over.
+     */
+    private fun split(members: List<PlannerSpeaker>, max: Int?, preferredHostKey: String?): List<List<PlannerSpeaker>> {
+        val stable = members.sortedWith(stableOrder)
+        if (max == null || stable.size <= max) return listOf(stable)
+        val groups = if (max == 2) pairUp(stable) else stable.chunked(max).map { it.toMutableList() }
+        val leftover = groups.lastOrNull()?.takeIf { it.size == 1 } ?: return groups
+        val anchor = members.firstOrNull { it.key == preferredHostKey && (it.present || it.connectedToPhone) }
+            ?: members.firstOrNull { it.playing }
+            ?: members.firstOrNull { it.connectedToPhone }
+        if (anchor == null || leftover.single() != anchor) return groups
+        // Swap the anchor in for the least important speaker of another group.
+        val (group, index) = groups.dropLast(1)
+            .flatMap { group -> group.indices.map { group to it } }
+            .minWith(
+                compareBy<Pair<MutableList<PlannerSpeaker>, Int>> { (g, i) -> g[i].present }
+                    .thenBy { (g, i) -> g[i].connectedToPhone }
+                    .thenBy { (g, i) -> g.size == 2 && !stereoCompatible(anchor.model!!, g[1 - i].model!!) }
+                    .thenByDescending { (g, i) -> stable.indexOf(g[i]) },
+            )
+        leftover[0] = group[index]
+        group[index] = anchor
+        return groups
+    }
+
+    /** Pairs stereo-compatible speakers that are equally present first, then the rest in order. */
+    private fun pairUp(stable: List<PlannerSpeaker>): List<MutableList<PlannerSpeaker>> {
+        val pairs = mutableListOf<MutableList<PlannerSpeaker>>()
+        val unpaired = stable.toMutableList()
+        var i = 0
+        while (i < unpaired.size) {
+            val a = unpaired[i]
+            val j = (i + 1 until unpaired.size).firstOrNull { k ->
+                val b = unpaired[k]
+                b.present == a.present && stereoCompatible(a.model!!, b.model!!)
+            }
+            if (j == null) {
+                i++
+            } else {
+                pairs += mutableListOf(a, unpaired[j])
+                unpaired.removeAt(j)
+                unpaired.removeAt(i)
+            }
+        }
+        unpaired.chunked(2).forEach { pairs += it.toMutableList() }
+        return pairs
     }
 
     private data class BucketKey(val family: LinkFamily, val subgroup: Subgroup)

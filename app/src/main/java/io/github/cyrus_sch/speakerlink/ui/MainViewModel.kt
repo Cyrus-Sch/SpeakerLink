@@ -17,6 +17,7 @@ import io.github.cyrus_sch.speakerlink.bluetooth.NearbyAdvert
 import io.github.cyrus_sch.speakerlink.core.ControlProtocol
 import io.github.cyrus_sch.speakerlink.core.Identification
 import io.github.cyrus_sch.speakerlink.core.IdentificationSource
+import io.github.cyrus_sch.speakerlink.core.LinkGroup
 import io.github.cyrus_sch.speakerlink.core.PartyPlan
 import io.github.cyrus_sch.speakerlink.core.PartyPlanner
 import io.github.cyrus_sch.speakerlink.core.PlannerSpeaker
@@ -213,9 +214,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Speakers that are around first, so absent ones do not take the connection slots.
         val targets = current.partySpeakers.filter { !it.connected }.sortedByDescending { it.nearby }.map { it.address }
         // The planner already picked the hosts (the user's choice only if that speaker is around).
-        // Play on the host of the user's group if there is one, else on the largest group's host.
-        val preferredGroup = current.plan.groups.firstOrNull { group -> group.speakers.any { it.key == current.preferredHost } }
-        bluetooth.connectAll(targets, playOn = (preferredGroup ?: current.plan.best)?.host?.key)
+        // Play on the host of the user's group, else of the largest group, if that host is around.
+        fun reachable(group: LinkGroup) = group.host.present || group.host.connectedToPhone
+        val groups = current.plan.groups
+        val group = groups.firstOrNull { g -> reachable(g) && g.speakers.any { it.key == current.preferredHost } }
+            ?: groups.firstOrNull(::reachable)
+            ?: current.plan.best
+        bluetooth.connectAll(targets, playOn = group?.host?.key)
     }
 
     /** Connects the phone to a group's host and makes it the playing speaker. */
