@@ -15,6 +15,11 @@ on:
       - "android/**"
       - ".github/workflows/android.yml"
   workflow_dispatch:
+    inputs:
+      update_screenshots:
+        description: Commit the emulator screenshots to the store listing
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -143,6 +148,42 @@ jobs:
             android/app/build/outputs/connected_android_test_additional_output/
             android/app/build/reports/androidTests/
             android/app/build/outputs/androidTest-results/
+
+  screenshots:
+    name: Commit store screenshots
+    needs: emulator
+    if: github.event_name == 'workflow_dispatch' && inputs.update_screenshots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Copy the new screenshots into the listing and push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -n speakerlink-emulator -D "$RUNNER_TEMP/emulator"
+          dest=app/fastlane/metadata/android/en-US/images/phoneScreenshots
+          for name in 1_speakers 2_party 3_info; do
+            file=$(find "$RUNNER_TEMP/emulator" -name "$name.png" | head -n 1)
+            if [ -z "$file" ]; then
+              echo "::error::Screenshot $name.png not found in the emulator artifact"
+              exit 1
+            fi
+            cp "$file" "$dest/$name.png"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$dest"
+          if git diff --cached --quiet; then
+            echo "The screenshots did not change."
+            exit 0
+          fi
+          git commit -m "Android: update store screenshots"
+          git push origin "HEAD:$GITHUB_REF_NAME"
 
   release:
     name: Signed release
