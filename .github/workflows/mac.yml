@@ -1,0 +1,373 @@
+name: Mac
+
+on:
+  push:
+    # Listing tags without branches would silently disable branch pushes.
+    branches:
+      - "**"
+    tags:
+      - "mac-v*"
+    paths:
+      - "mac/**"
+      - ".github/workflows/mac.yml"
+  pull_request:
+    paths:
+      - "mac/**"
+      - ".github/workflows/mac.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+defaults:
+  run:
+    # "bash" (unlike the implicit default) adds -o pipefail.
+    shell: bash
+    working-directory: mac
+
+env:
+  # The Xcode the app is built and released with (Swift 6.3, macOS 26 SDK).
+  XCODE_APP: /Applications/Xcode_26.6.app
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: |
+          if [ -d "$XCODE_APP" ]; then
+            echo "DEVELOPER_DIR=$XCODE_APP/Contents/Developer" >> "$GITHUB_ENV"
+          else
+            echo "::warning::$XCODE_APP is not installed on this runner, using the default Xcode."
+          fi
+
+      - name: Show the toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          echo "macOS SDK: $(xcrun --sdk macosx --show-sdk-version)"
+          csrutil status || true
+
+      - name: Build (warnings are errors)
+        run: swift build -Xswiftc -warnings-as-errors
+
+      - name: Unit tests
+        run: swift test --filter SpeakerLinkCoreTests
+
+      - name: Install the BlackHole virtual audio devices
+        run: |
+          brew install --cask blackhole-2ch blackhole-16ch
+          # The casks no longer restart Core Audio; launchd restarts coreaudiod after the kill.
+          sudo killall -9 coreaudiod || true
+          deadline=$((SECONDS + 60))
+          while :; do
+            devices="$(system_profiler SPAudioDataType 2> /dev/null || true)"
+            if grep -qF "BlackHole 2ch" <<< "$devices" && grep -qF "BlackHole 16ch" <<< "$devices"; then
+              echo "$devices"
+              echo "BlackHole 2ch and BlackHole 16ch are available."
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Audio devices after 60 s:"
+              echo "$devices"
+              ls -la /Library/Audio/Plug-Ins/HAL || true
+              echo "::error::BlackHole 2ch and BlackHole 16ch did not appear within 60 s."
+              exit 1
+            fi
+            sleep 2
+          done
+
+      - name: Core Audio integration tests (BlackHole)
+        timeout-minutes: 20
+        run: SPEAKERLINK_AUDIO_TESTS=1 swift test --filter SpeakerLinkAudioTests
+
+      - name: Build the universal app
+        run: scripts/build-app.sh --universal
+
+      - name: Check the app bundle
+        run: |
+          APP=build/SpeakerLink.app
+          BIN="$APP/Contents/MacOS/SpeakerLink"
+          plutil -lint "$APP/Contents/Info.plist"
+          plutil -p "$APP/Contents/Info.plist"
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "Architectures: $ARCHS"
+          for arch in arm64 x86_64; do
+            if ! grep -qw "$arch" <<< "$ARCHS"; then
+              echo "::error::$BIN has no $arch slice (found: $ARCHS)"
+              exit 1
+            fi
+          done
+          codesign --verify --strict --verbose=2 "$APP"
+          codesign --display --verbose=2 "$APP"
+          codesign --display --requirements - "$APP"
+          vtool -show-build "$BIN"
+          SDK="$(xcrun --sdk macosx --show-sdk-version)"
+          for arch in arm64 x86_64; do
+            BUILD_VERSION="$(vtool -arch "$arch" -show-build "$BIN")"
+            MINOS="$(awk '$1 == "minos" { print $2; exit }' <<< "$BUILD_VERSION")"
+            BUILT_SDK="$(awk '$1 == "sdk" { print $2; exit }' <<< "$BUILD_VERSION")"
+            echo "$arch: minos $MINOS, sdk $BUILT_SDK (Xcode SDK $SDK)"
+            if [ "$MINOS" != "14.0" ]; then
+              echo "::error::$arch deployment target is $MINOS, expected 14.0"
+              exit 1
+            fi
+            if [ "$BUILT_SDK" = "$MINOS" ]; then
+              echo "::error::$arch records SDK $BUILT_SDK, the deployment target: AppKit would use the old look on macOS 26+"
+              exit 1
+            fi
+            if [ "$BUILT_SDK" != "$SDK" ]; then
+              echo "::warning::$arch records SDK $BUILT_SDK, but the selected SDK is $SDK"
+            fi
+          done
+
+      - name: Render the screenshots
+        timeout-minutes: 5
+        run: |
+          SHOTS="$RUNNER_TEMP/shots"
+          mkdir -p "$SHOTS"
+          build/SpeakerLink.app/Contents/MacOS/SpeakerLink --screenshot "$SHOTS"
+          for name in menu-light.png menu-dark.png; do
+            if [ ! -s "$SHOTS/$name" ]; then
+              echo "::error::Screenshot $name was not written"
+              exit 1
+            fi
+            sips -g pixelWidth -g pixelHeight "$SHOTS/$name"
+          done
+          mkdir -p build/screenshots
+          cp "$SHOTS"/*.png build/screenshots/
+
+      - name: Print screenshots (base64)
+        run: |
+          find "$RUNNER_TEMP/shots" -name '*.png' | sort | while read -r f; do
+            echo "SCREENSHOT-BEGIN $(basename "$f")"
+            base64 < "$f" | tr -d '\n' | fold -w 4000
+            echo
+            echo "SCREENSHOT-END"
+          done
+
+      - name: Upload the app and screenshots
+        uses: actions/upload-artifact@v7
+        with:
+          name: speakerlink-mac
+          if-no-files-found: error
+          path: |
+            mac/build/SpeakerLink-*.zip
+            mac/build/screenshots/*.png
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/mac-v')
+    needs: build
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Xcode
+        run: |
+          if [ -d "$XCODE_APP" ]; then
+            echo "DEVELOPER_DIR=$XCODE_APP/Contents/Developer" >> "$GITHUB_ENV"
+          else
+            echo "::warning::$XCODE_APP is not installed on this runner, using the default Xcode."
+          fi
+
+      - name: Show the toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Check that the tag matches VERSION
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ "$TAG" != "mac-v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match mac/VERSION ($VERSION). Expected tag mac-v$VERSION."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check for the Developer ID secrets
+        id: signing
+        env:
+          MAC_DEVELOPER_ID_P12_BASE64: ${{ secrets.MAC_DEVELOPER_ID_P12_BASE64 }}
+          MAC_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD }}
+          MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+          MAC_NOTARY_KEY_P8_BASE64: ${{ secrets.MAC_NOTARY_KEY_P8_BASE64 }}
+          MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          MAC_NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
+        run: |
+          missing=()
+          for name in MAC_DEVELOPER_ID_P12_BASE64 MAC_DEVELOPER_ID_P12_PASSWORD MAC_SIGN_IDENTITY \
+            MAC_NOTARY_KEY_P8_BASE64 MAC_NOTARY_KEY_ID MAC_NOTARY_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "All Developer ID secrets are set: the release is signed and notarized."
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          elif [ "${#missing[@]}" -eq 6 ]; then
+            echo "::notice::No Developer ID secrets are set: the release is ad-hoc signed and not notarized."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Some Developer ID secrets are missing (${missing[*]}): the release is ad-hoc signed and not notarized."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          P12_BASE64: ${{ secrets.MAC_DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/speakerlink-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          P12="$RUNNER_TEMP/developer-id.p12"
+          echo "$P12_BASE64" | base64 --decode > "$P12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          # The intermediate certificates, in case the .p12 holds only the identity.
+          for ca in DeveloperIDG2CA DeveloperIDCA; do
+            if curl -fsSL --retry 3 "https://www.apple.com/certificateauthority/$ca.cer" -o "$RUNNER_TEMP/$ca.cer"; then
+              security import "$RUNNER_TEMP/$ca.cer" -k "$KEYCHAIN" > /dev/null 2>&1 || true
+            else
+              echo "::warning::Could not download Apple's $ca intermediate certificate."
+            fi
+          done
+          # Put the temporary keychain in front of the existing search list.
+          OLD_KEYCHAINS=()
+          while IFS= read -r line; do
+            line="${line//\"/}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            if [ -n "$line" ]; then
+              OLD_KEYCHAINS+=("$line")
+            fi
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN" "${OLD_KEYCHAINS[@]}"
+          security list-keychains -d user
+          IDENTITIES="$(security find-identity -v -p codesigning "$KEYCHAIN")"
+          echo "$IDENTITIES"
+          if ! grep -qF -- "$SIGN_IDENTITY" <<< "$IDENTITIES"; then
+            echo "::error::MAC_SIGN_IDENTITY is not a valid code signing identity in the imported certificate."
+            exit 1
+          fi
+          echo "SPEAKERLINK_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Build the universal app
+        env:
+          SPEAKERLINK_SIGN_IDENTITY: ${{ steps.signing.outputs.enabled == 'true' && secrets.MAC_SIGN_IDENTITY || '' }}
+        run: scripts/build-app.sh --universal
+
+      - name: Notarize and staple
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.MAC_NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
+        run: |
+          APP=build/SpeakerLink.app
+          ZIP="build/SpeakerLink-$VERSION.zip"
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          RESULT="$RUNNER_TEMP/notarization.json"
+          echo "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$KEY"
+          AUTH=(--key "$KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID")
+          xcrun notarytool submit "$ZIP" "${AUTH[@]}" --wait --timeout 30m --output-format json > "$RESULT" || true
+          cat "$RESULT"
+          echo
+          ID="$(plutil -extract id raw -o - "$RESULT" 2> /dev/null || true)"
+          STATUS="$(plutil -extract status raw -o - "$RESULT" 2> /dev/null || true)"
+          if [ -n "$ID" ]; then
+            xcrun notarytool log "$ID" "${AUTH[@]}" || true
+          fi
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization did not succeed (status: ${STATUS:-unknown}). See the log above."
+            exit 1
+          fi
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          # A zip cannot be stapled: zip the stapled app again.
+          rm -f "$ZIP"
+          ditto -c -k --keepParent "$APP" "$ZIP"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          SIGNED: ${{ steps.signing.outputs.enabled }}
+        run: |
+          ZIP="SpeakerLink-$VERSION.zip"
+          (cd build && shasum -a 256 "$ZIP" | tee "$ZIP.sha256")
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          SECTION="$RUNNER_TEMP/changelog-section.md"
+          awk -v v="$VERSION" '
+            /^## / { if (found) exit; if ($2 == v || $2 == "[" v "]") { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > "$SECTION"
+          {
+            if grep -q '[^[:space:]]' "$SECTION"; then
+              cat "$SECTION"
+            else
+              echo "SpeakerLink for Mac $VERSION: play the same audio on several Bluetooth headphones and speakers at once."
+            fi
+            echo
+            echo "## Install"
+            echo
+            echo "Requires macOS 14 Sonoma or later (Apple silicon or Intel)."
+            echo "Download \`$ZIP\`, open it and move **SpeakerLink.app** to your Applications folder."
+            echo "Check the download with \`shasum -a 256 -c $ZIP.sha256\`."
+            echo
+            if [ "$SIGNED" = "true" ]; then
+              echo "This build is signed with a Developer ID and notarized by Apple, so it opens normally."
+            else
+              echo "This build is **not notarized** by Apple (it is ad-hoc signed), so macOS blocks it the first time you open it:"
+              echo
+              echo "1. Open SpeakerLink. macOS says it could not verify that \"SpeakerLink\" is free of malware. Click **Done**."
+              echo "2. Open **System Settings > Privacy & Security** and scroll down to **Security**."
+              echo "3. Next to the message about SpeakerLink, click **Open Anyway**. The button is shown for about an hour after you tried to open the app."
+              echo "4. Confirm with **Open Anyway** and enter your login password (or use Touch ID) when asked. Later launches open normally."
+              echo
+              echo "On macOS 14 you can instead Control-click the app in Finder and choose **Open**."
+              echo "Or remove the quarantine flag in Terminal:"
+              echo
+              echo '```sh'
+              echo "xattr -dr com.apple.quarantine /Applications/SpeakerLink.app"
+              echo '```'
+            fi
+          } > "$NOTES"
+          cat "$NOTES"
+          gh release create "$TAG" "build/$ZIP" "build/$ZIP.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "SpeakerLink for Mac $VERSION" \
+            --notes-file "$NOTES"
+
+      - name: Remove the temporary keychain and keys
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/speakerlink-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/speakerlink-signing.keychain-db" || true
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/developer-id.p12"
