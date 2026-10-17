@@ -55,11 +55,19 @@ private val DarkColors = darkColorScheme(
     outline = Color(0xFF899393),
 )
 
+/**
+ * The app theme. [dynamicColor] uses the wallpaper colours on Android 12+; the store screenshots
+ * turn it off so they show SpeakerLink's own palette.
+ */
 @Composable
-fun SpeakerLinkTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun SpeakerLinkTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = true,
+    content: @Composable () -> Unit,
+) {
     val context = LocalContext.current
     val colors = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         darkTheme -> DarkColors
         else -> LightColors

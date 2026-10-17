@@ -123,7 +123,7 @@ class ScreenshotTest {
         val state = sampleState()
 
         compose.setContent {
-            SpeakerLinkTheme(darkTheme = false) {
+            SpeakerLinkTheme(darkTheme = false, dynamicColor = false) {
                 AppRoot(state, emptyFlow(), deviceActions, togetherActions, infoActions)
             }
         }
