@@ -145,8 +145,8 @@ fi
 
 # Swift 6.4's default build system can record the deployment target as the SDK
 # version, which makes AppKit fall back to the old look on macOS 26 and later.
-if command -v vtool > /dev/null 2>&1; then
-  build_version="$(vtool -show-build "$APP/Contents/MacOS/$APP_NAME" 2> /dev/null || true)"
+if command -v xcrun > /dev/null 2>&1 && xcrun --find vtool > /dev/null 2>&1; then
+  build_version="$(xcrun vtool -show-build "$APP/Contents/MacOS/$APP_NAME" 2> /dev/null || true)"
   minos="$(awk '$1 == "minos" { print $2; exit }' <<< "$build_version")"
   sdk="$(awk '$1 == "sdk" { print $2; exit }' <<< "$build_version")"
   if [ -n "$sdk" ]; then

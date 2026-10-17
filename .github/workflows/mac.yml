@@ -113,10 +113,10 @@ jobs:
           codesign --verify --strict --verbose=2 "$APP"
           codesign --display --verbose=2 "$APP"
           codesign --display --requirements - "$APP"
-          vtool -show-build "$BIN"
+          xcrun vtool -show-build "$BIN"
           SDK="$(xcrun --sdk macosx --show-sdk-version)"
           for arch in arm64 x86_64; do
-            BUILD_VERSION="$(vtool -arch "$arch" -show-build "$BIN")"
+            BUILD_VERSION="$(xcrun vtool -arch "$arch" -show-build "$BIN")"
             MINOS="$(awk '$1 == "minos" { print $2; exit }' <<< "$BUILD_VERSION")"
             BUILT_SDK="$(awk '$1 == "sdk" { print $2; exit }' <<< "$BUILD_VERSION")"
             echo "$arch: minos $MINOS, sdk $BUILT_SDK (Xcode SDK $SDK)"
@@ -324,7 +324,7 @@ jobs:
           SECTION="$RUNNER_TEMP/changelog-section.md"
           awk -v v="$VERSION" '
             /^## / { if (found) exit; if ($2 == v || $2 == "[" v "]") { found = 1; next } }
-            found { print }
+            found && (started || NF) { started = 1; print }
           ' CHANGELOG.md > "$SECTION"
           {
             if grep -q '[^[:space:]]' "$SECTION"; then
