@@ -138,6 +138,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clock,
     ) { outputs, prefs, statuses, permissions, now -> Environment(outputs, prefs, statuses, permissions, now) }
 
+    /** The last plan, so pairs stay together while speakers connect and switch output. Declared before [state]. */
+    @Volatile
+    private var lastPlan: PartyPlan? = null
+
     val state: StateFlow<UiState> = combine(bluetoothSnapshot, environment, capabilities, maxConnected) { bt, env, caps, max ->
         build(bt, env, caps, max)
     }.flowOn(Dispatchers.Default)
@@ -401,7 +405,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             },
             caps.forPlanner(),
             env.prefs.preferredHost,
-        )
+            previous = lastPlan,
+        ).also { lastPlan = it }
         return UiState(
             bluetoothSupported = bluetooth.isSupported,
             permissionsGranted = env.permissions,

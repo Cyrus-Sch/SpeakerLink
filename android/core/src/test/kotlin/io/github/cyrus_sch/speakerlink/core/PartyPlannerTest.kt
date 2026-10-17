@@ -1,5 +1,6 @@
 package io.github.cyrus_sch.speakerlink.core
 
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -228,6 +229,101 @@ class PartyPlannerTest {
         val idle = PartyPlanner.plan(listOf(club, xtreme4, flip6))
         val playing = PartyPlanner.plan(listOf(xtreme4.copy(playing = true, connectedToPhone = true), club, flip6))
         assertEquals(groups(idle), groups(playing))
+    }
+
+    @Test
+    fun pairsSurviveSwitchingOutputInsideAGroup() {
+        val (a, b, c) = List(3) { speaker("partybox310").copy(connectedToPhone = true) }
+        // c plays, so it is protected and pairs with a; b is left over.
+        val first = PartyPlanner.plan(listOf(a, b, c.copy(playing = true)))
+        assertEquals(setOf(a.key, c.key), first.best!!.speakers.map { it.key }.toSet())
+        // Output moves to a (same group): the pair stays, a becomes the host.
+        val second = PartyPlanner.plan(listOf(a.copy(playing = true), b, c), previous = first)
+        assertEquals(setOf(a.key, c.key), second.best!!.speakers.map { it.key }.toSet())
+        assertEquals(a.key, second.best!!.host.key)
+        // Without the previous plan the stable pairing would have been a + b.
+        assertEquals(setOf(a.key, b.key), PartyPlanner.plan(listOf(a.copy(playing = true), b, c)).best!!.speakers.map { it.key }.toSet())
+    }
+
+    @Test
+    fun speakersThatAreAroundArePairedFirst() {
+        val here = speaker("partybox310")
+        val away1 = speaker("partybox310").copy(present = false)
+        val away2 = speaker("partybox310").copy(present = false)
+        val plan = PartyPlanner.plan(listOf(here, away1, away2))
+        assertTrue(here in plan.best!!.speakers)
+        assertEquals(away2, plan.excluded.single().speaker)
+
+        val flips = List(3) { speaker("flip3") } + List(2) { speaker("flip3").copy(present = false) }
+        val five = PartyPlanner.plan(flips)
+        assertEquals(flips[4], five.excluded.single().speaker)
+        assertTrue(five.groups.any { g -> g.speakers.toSet() == setOf(flips[0], flips[1]) })
+    }
+
+    @Test
+    fun protectedSpeakerDoesNotBreakAStereoPairNeedlessly() {
+        val (k1, k2) = List(2) { speaker("partybox710") }
+        val k3 = speaker("partybox110")
+        val k4 = speaker("partybox310")
+        val k5 = speaker("partyboxencore", playing = true)
+        val plan = PartyPlanner.plan(listOf(k1, k2, k3, k4, k5))
+        assertTrue(plan.groups.any { it.speakers.toSet() == setOf(k1, k2) && it.stereoPairPossible })
+        assertTrue(plan.groups.any { k5 in it.speakers })
+
+        // The playing speaker gets a partner that is around, even if that costs a stereo pair.
+        val (p1, p2) = List(2) { speaker("partybox310") }
+        val playing = speaker("partybox110", playing = true)
+        val (a1, a2) = List(2) { speaker("partybox710").copy(present = false) }
+        val mixed = PartyPlanner.plan(listOf(p1, p2, playing, a1, a2))
+        val hostGroup = mixed.groups.single { playing in it.speakers }
+        assertTrue(hostGroup.speakers.all { it.present })
+    }
+
+    @Test
+    fun rememberedHostIsKeptWhenNoSpeakerIsAroundAndThereAreTooMany() {
+        val flips = List(3) { speaker("flip3").copy(present = false) }
+        val plan = PartyPlanner.plan(flips, preferredHostKey = flips[2].key)
+        assertEquals(flips[2], plan.best!!.host)
+        assertTrue(plan.excluded.none { it.speaker == flips[2] })
+    }
+
+    @Test
+    fun randomSelectionsKeepTheirPairsAndNeverDropThePlayingSpeaker() {
+        val random = Random(20261017)
+        val models = listOf("partybox110", "partybox310", "partybox710", "partyboxclub120", "flip3", "charge3", "xtreme4", "flip6", "go4")
+        fun pairs(plan: PartyPlan) = plan.groups.map { group -> group.speakers.map { it.key }.toSet() }.toSet()
+        repeat(3_000) {
+            val speakers = List(random.nextInt(2, 8)) {
+                speaker(models[random.nextInt(models.size)]).copy(
+                    present = random.nextInt(4) != 0,
+                    connectedToPhone = random.nextBoolean(),
+                )
+            }
+            val before = PartyPlanner.plan(speakers)
+            // A speaker that already is in a group starts playing: the groups stay as they are.
+            val grouped = before.groups.flatMap { it.speakers }
+            if (grouped.isNotEmpty()) {
+                val starts = grouped[random.nextInt(grouped.size)]
+                val after = PartyPlanner.plan(
+                    speakers.map { if (it.key == starts.key) it.copy(playing = true, connectedToPhone = true) else it },
+                    previous = before,
+                )
+                assertEquals(pairs(before), pairs(after), "groups changed when ${starts.name} started playing in $speakers")
+            }
+            // A speaker's sighting ages out (or it is seen again): the groups stay as they are.
+            val flips = speakers[random.nextInt(speakers.size)]
+            val aged = PartyPlanner.plan(
+                speakers.map { if (it.key == flips.key) it.copy(present = !it.present) else it },
+                previous = before,
+            )
+            assertEquals(pairs(before), pairs(aged), "groups changed when ${flips.name} came or went in $speakers")
+            // The playing speaker is only left out when it has no possible partner at all.
+            val playing = speakers[random.nextInt(speakers.size)].copy(playing = true, connectedToPhone = true)
+            val withPlaying = PartyPlanner.plan(speakers.map { if (it.key == playing.key) playing else it.copy(playing = false) })
+            withPlaying.excluded.singleOrNull { it.speaker.key == playing.key }?.let {
+                assertTrue(it.reason != ExclusionReason.GROUP_FULL, "playing ${playing.name} left over in $speakers")
+            }
+        }
     }
 
     @Test

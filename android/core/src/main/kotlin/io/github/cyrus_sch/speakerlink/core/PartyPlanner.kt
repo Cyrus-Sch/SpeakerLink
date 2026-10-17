@@ -127,8 +127,9 @@ data class PartyPlan(
 /**
  * Works out which of the selected speakers can play together and how to link them.
  *
- * The plan is deterministic: the same input always gives the same groups, hosts and order, so the
- * UI does not jump around while Bluetooth state updates arrive.
+ * The plan is deterministic: the same input always gives the same groups, hosts and order. Pass
+ * the [previous] plan so that pairs the user may already be linking stay together while speakers
+ * connect, start playing and switch output.
  */
 object PartyPlanner {
 
@@ -136,6 +137,7 @@ object PartyPlanner {
         speakers: List<PlannerSpeaker>,
         capabilities: PhoneCapabilities = PhoneCapabilities(),
         preferredHostKey: String? = null,
+        previous: PartyPlan? = null,
     ): PartyPlan {
         val unique = speakers.distinctBy { it.key }
         val excluded = mutableListOf<ExcludedSpeaker>()
@@ -153,6 +155,7 @@ object PartyPlanner {
 
         val assignment = assignFamilies(linkable)
         val buckets = linkable.groupBy { bucketKey(it, assignment.getValue(it.key)) }
+        val previousPairs = previous?.groups.orEmpty().filter { it.size == 2 }.map { group -> group.speakers.map { it.key }.toSet() }.toSet()
 
         val groups = mutableListOf<LinkGroup>()
         for ((key, members) in buckets) {
@@ -164,7 +167,7 @@ object PartyPlanner {
                 continue
             }
             // Families with a size limit (two speakers) can still form several separate groups.
-            for (chunk in split(members, family.maxSpeakers, preferredHostKey)) {
+            for (chunk in split(members, family.maxSpeakers, preferredHostKey, previousPairs)) {
                 if (chunk.size < 2) {
                     excluded += chunk.map { ExcludedSpeaker(it, ExclusionReason.GROUP_FULL, family) }
                 } else {
@@ -203,7 +206,8 @@ object PartyPlanner {
         }
         val (single, multi) = linkable.partition { it.model!!.families.size == 1 }
         for (speaker in single) assign(speaker, speaker.model!!.families.single())
-        for (speaker in multi.sortedWith(stableOrder)) {
+        // Address order: neither playback nor sightings (which age on their own) change the result.
+        for (speaker in multi.sortedBy { it.key }) {
             fun count(family: LinkFamily) = counts[bucketKey(speaker, family)] ?: 0
             fun fit(family: LinkFamily): Int {
                 val count = count(family)
@@ -232,56 +236,108 @@ object PartyPlanner {
         .thenBy { it.key }
 
     /**
-     * Splits one bucket into groups of at most [max] speakers. The split is stable, so groups do
-     * not change when another speaker starts playing. Pairs of the same model (which can play in
-     * stereo with the speakers' own buttons) are formed first. The speaker that should host (the
-     * user's choice, or the one playing or connected) is never the one left over.
+     * Splits one bucket into groups of at most [max] speakers. Two-speaker families get the best
+     * pairing (see [pairUp]); larger limits are only reached with very many speakers and are
+     * filled in a stable order, protected speakers first.
      */
-    private fun split(members: List<PlannerSpeaker>, max: Int?, preferredHostKey: String?): List<List<PlannerSpeaker>> {
+    private fun split(
+        members: List<PlannerSpeaker>,
+        max: Int?,
+        preferredHostKey: String?,
+        previousPairs: Set<Set<String>>,
+    ): List<List<PlannerSpeaker>> {
         val stable = members.sortedWith(stableOrder)
         if (max == null || stable.size <= max) return listOf(stable)
-        val groups = if (max == 2) pairUp(stable) else stable.chunked(max).map { it.toMutableList() }
-        val leftover = groups.lastOrNull()?.takeIf { it.size == 1 } ?: return groups
-        val anchor = members.firstOrNull { it.key == preferredHostKey && (it.present || it.connectedToPhone) }
-            ?: members.firstOrNull { it.playing }
-            ?: members.firstOrNull { it.connectedToPhone }
-        if (anchor == null || leftover.single() != anchor) return groups
-        // Swap the anchor in for the least important speaker of another group.
-        val (group, index) = groups.dropLast(1)
-            .flatMap { group -> group.indices.map { group to it } }
-            .minWith(
-                compareBy<Pair<MutableList<PlannerSpeaker>, Int>> { (g, i) -> g[i].present }
-                    .thenBy { (g, i) -> g[i].connectedToPhone }
-                    .thenBy { (g, i) -> g.size == 2 && !stereoCompatible(anchor.model!!, g[1 - i].model!!) }
-                    .thenByDescending { (g, i) -> stable.indexOf(g[i]) },
-            )
-        leftover[0] = group[index]
-        group[index] = anchor
-        return groups
+        val isProtected = protection(stable, preferredHostKey)
+        if (max == 2 && stable.size <= MAX_EXACT_PAIRING) return pairUp(stable, isProtected, previousPairs)
+        return stable.sortedByDescending(isProtected).chunked(max)
     }
 
-    /** Pairs stereo-compatible speakers that are equally present first, then the rest in order. */
-    private fun pairUp(stable: List<PlannerSpeaker>): List<MutableList<PlannerSpeaker>> {
-        val pairs = mutableListOf<MutableList<PlannerSpeaker>>()
-        val unpaired = stable.toMutableList()
-        var i = 0
-        while (i < unpaired.size) {
-            val a = unpaired[i]
-            val j = (i + 1 until unpaired.size).firstOrNull { k ->
-                val b = unpaired[k]
-                b.present == a.present && stereoCompatible(a.model!!, b.model!!)
-            }
-            if (j == null) {
-                i++
-            } else {
-                pairs += mutableListOf(a, unpaired[j])
-                unpaired.removeAt(j)
-                unpaired.removeAt(i)
+    /**
+     * Speakers that must not be left out of a group: the one playing, and the user's chosen host
+     * if it is around (or if no speaker is around at all).
+     */
+    private fun protection(members: List<PlannerSpeaker>, preferredHostKey: String?): (PlannerSpeaker) -> Boolean {
+        val nobodyAround = members.none { it.around }
+        return { it.playing || (it.key == preferredHostKey && (it.around || nobodyAround)) }
+    }
+
+    private val PlannerSpeaker.around: Boolean get() = present || connectedToPhone
+
+    /**
+     * Finds the best way to pair [stable] (at most one speaker is left over). Criteria, in order:
+     * no protected speaker left over; as many pairs from the previous plan as possible (the user
+     * may be linking them, and "around" changes on its own as sightings age); an absent speaker
+     * left over rather than one that is around; as many pairs of speakers that are around as
+     * possible; protected speakers with a partner that is around; as many same-model (stereo)
+     * pairs as possible; then the speaker last in the stable order left over and the first pairing
+     * in stable order. Connections are deliberately not a criterion: they change one by one while
+     * "Connect all" runs.
+     */
+    private fun pairUp(
+        stable: List<PlannerSpeaker>,
+        isProtected: (PlannerSpeaker) -> Boolean,
+        previousPairs: Set<Set<String>>,
+    ): List<List<PlannerSpeaker>> {
+        fun score(pairs: List<Pair<Int, Int>>, leftover: Int?): IntArray {
+            val left = leftover?.let { stable[it] }
+            val retained = pairs.count { (a, b) -> setOf(stable[a].key, stable[b].key) in previousPairs }
+            return intArrayOf(
+                if (left != null && isProtected(left)) 0 else 1,
+                retained,
+                if (left != null && left.around) 0 else 1,
+                pairs.count { (a, b) -> stable[a].around && stable[b].around },
+                pairs.sumOf { (a, b) ->
+                    (if (isProtected(stable[a]) && stable[b].around) 1 else 0) +
+                        (if (isProtected(stable[b]) && stable[a].around) 1 else 0)
+                },
+                pairs.count { (a, b) -> stereoCompatible(stable[a].model!!, stable[b].model!!) },
+                leftover ?: 0,
+            )
+        }
+
+        var best: List<Pair<Int, Int>> = emptyList()
+        var bestLeftover: Int? = null
+        var bestScore: IntArray? = null
+        val all = stable.indices.toList()
+        val leftovers: List<Int?> = if (stable.size % 2 == 0) listOf(null) else all
+        for (leftover in leftovers) {
+            forEachPerfectMatching(all.filter { it != leftover }) { pairs ->
+                val score = score(pairs, leftover)
+                if (bestScore.let { it == null || compareScores(score, it) > 0 }) {
+                    best = pairs
+                    bestLeftover = leftover
+                    bestScore = score
+                }
             }
         }
-        unpaired.chunked(2).forEach { pairs += it.toMutableList() }
-        return pairs
+        return best.map { (a, b) -> listOf(stable[a], stable[b]) } + listOfNotNull(bestLeftover?.let { listOf(stable[it]) })
     }
+
+    /** Calls [action] with every way to split [items] (an even number) into pairs, first pairing first. */
+    private fun forEachPerfectMatching(items: List<Int>, action: (List<Pair<Int, Int>>) -> Unit) {
+        fun recurse(rest: List<Int>, acc: List<Pair<Int, Int>>) {
+            if (rest.isEmpty()) {
+                action(acc)
+                return
+            }
+            val first = rest[0]
+            for (i in 1 until rest.size) {
+                recurse(rest.filterIndexed { index, _ -> index != 0 && index != i }, acc + (first to rest[i]))
+            }
+        }
+        recurse(items, emptyList())
+    }
+
+    private fun compareScores(a: IntArray, b: IntArray): Int {
+        for (i in a.indices) {
+            if (a[i] != b[i]) return a[i].compareTo(b[i])
+        }
+        return 0
+    }
+
+    /** Up to 12 speakers there are at most 10,395 pairings to compare; beyond that, pair in order. */
+    private const val MAX_EXACT_PAIRING = 12
 
     private data class BucketKey(val family: LinkFamily, val subgroup: Subgroup)
 
