@@ -30,8 +30,8 @@ import io.github.cyrus_sch.speakerlink.system.SystemScreens
 import kotlinx.coroutines.flow.Flow
 
 enum class Tab(@StringRes val label: Int, @DrawableRes val icon: Int, val tag: String) {
-    SPEAKERS(R.string.tab_speakers, R.drawable.ic_speaker, "tab_speakers"),
-    PARTY(R.string.tab_party, R.drawable.ic_celebration, "tab_party"),
+    DEVICES(R.string.tab_speakers, R.drawable.ic_bluetooth, "tab_devices"),
+    TOGETHER(R.string.tab_party, R.drawable.ic_groups, "tab_together"),
     INFO(R.string.tab_info, R.drawable.ic_info, "tab_info"),
 }
 
@@ -40,11 +40,11 @@ enum class Tab(@StringRes val label: Int, @DrawableRes val icon: Int, val tag: S
 fun AppRoot(
     state: UiState,
     events: Flow<BluetoothEvent>,
-    speakerActions: SpeakerActions,
-    partyActions: PartyActions,
+    deviceActions: DeviceActions,
+    togetherActions: TogetherActions,
     infoActions: InfoActions,
 ) {
-    var tab by rememberSaveable { mutableStateOf(Tab.SPEAKERS) }
+    var tab by rememberSaveable { mutableStateOf(Tab.DEVICES) }
     val snackbars = remember { SnackbarHostState() }
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -95,8 +95,8 @@ fun AppRoot(
         snackbarHost = { SnackbarHost(snackbars) },
     ) { padding ->
         when (tab) {
-            Tab.SPEAKERS -> SpeakersScreen(state, speakerActions, padding)
-            Tab.PARTY -> PartyScreen(state, partyActions, padding)
+            Tab.DEVICES -> DevicesScreen(state, deviceActions, padding)
+            Tab.TOGETHER -> TogetherScreen(state, togetherActions, padding)
             Tab.INFO -> InfoScreen(state, infoActions, padding)
         }
     }

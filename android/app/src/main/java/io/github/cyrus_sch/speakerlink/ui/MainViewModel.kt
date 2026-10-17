@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import io.github.cyrus_sch.speakerlink.SpeakerLinkApp
 import io.github.cyrus_sch.speakerlink.audio.BluetoothOutput
 import io.github.cyrus_sch.speakerlink.bluetooth.AdapterState
+import io.github.cyrus_sch.speakerlink.bluetooth.AudioKind
 import io.github.cyrus_sch.speakerlink.bluetooth.BluetoothEvent
 import io.github.cyrus_sch.speakerlink.bluetooth.BtPermissions
 import io.github.cyrus_sch.speakerlink.bluetooth.DeviceRecord
@@ -41,23 +42,27 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** One speaker as the screens show it. */
-data class SpeakerUi(
+/** One Bluetooth audio device (speaker, headphones, earbuds...) as the screens show it. */
+data class DeviceUi(
     val address: String,
     val name: String,
+    val kind: AudioKind,
+    /** The recognised model; JBL speakers only. */
     val model: SpeakerModel?,
     val modelSource: IdentificationSource,
+    /** A JBL speaker: the model line and picker, status reading and the linking planner apply. */
     val isJbl: Boolean,
     val bonded: Boolean,
     val bonding: Boolean,
     val link: LinkState,
-    /** The phone's media audio currently goes to this speaker. */
+    /** The phone's media audio currently goes to this device. */
     val playing: Boolean,
     /** Seen by discovery, an advertisement or a connection in the last two minutes. */
     val nearby: Boolean,
-    val inParty: Boolean,
+    /** In the "use together" selection (Together tab and Connect all). */
+    val selected: Boolean,
     val status: SpeakerStatus?,
-    /** The speaker speaks the JBL control protocol, so battery etc. can be read. */
+    /** A JBL speaker that speaks the JBL control protocol, so battery etc. can be read. */
     val canReadStatus: Boolean,
 ) {
     val connected: Boolean get() = link == LinkState.CONNECTED
@@ -67,21 +72,24 @@ data class UiState(
     val bluetoothSupported: Boolean = true,
     val permissionsGranted: Boolean = false,
     val adapter: AdapterState = AdapterState.OFF,
-    /** Paired speakers (JBL only, unless the user asked to see every audio device). */
-    val speakers: List<SpeakerUi> = emptyList(),
-    /** Unpaired speakers found by a scan (in pairing mode). */
-    val discovered: List<SpeakerUi> = emptyList(),
+    /** Paired Bluetooth audio devices: speakers, headphones and other audio devices. */
+    val devices: List<DeviceUi> = emptyList(),
+    /** Unpaired audio devices found by a scan (in pairing mode). */
+    val discovered: List<DeviceUi> = emptyList(),
     /** JBL models advertising nearby that a scan could not pair with (not in pairing mode). */
     val nearbyNotInPairingMode: List<String> = emptyList(),
     val scanning: Boolean = false,
     val connectedCount: Int = 0,
     val maxConnected: Int? = null,
-    val playing: SpeakerUi? = null,
+    val playing: DeviceUi? = null,
     val canConnectDirectly: Boolean = true,
-    val partySpeakers: List<SpeakerUi> = emptyList(),
-    val plan: PartyPlan = PartyPlan(emptyList(), emptyList(), emptyList()),
+    /** Devices selected to be used together. */
+    val selected: List<DeviceUi> = emptyList(),
+    /** What the phone itself offers for playing on the selected devices at once. */
+    val phoneOptions: List<PhoneOption> = emptyList(),
+    /** How the selected JBL speakers can link among themselves. */
+    val plan: PartyPlan = PartyPlan(emptyList(), emptyList()),
     val preferredHost: String? = null,
-    val showAllAudioDevices: Boolean = false,
     val capabilities: DeviceCapabilities? = null,
 )
 
@@ -207,16 +215,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect(address: String) = bluetooth.disconnect(address)
 
-    /** Sends the phone's audio to this (connected) speaker. */
+    /** Sends the phone's audio to this (connected) device. */
     fun playOn(address: String) {
         bluetooth.setActive(address)
     }
 
-    /** Connects every speaker in the party selection; the preferred host ends up playing. */
+    /** Connects every device in the "use together" selection; a JBL group's host ends up playing. */
     fun connectAll() {
         val current = state.value
-        // Speakers that are around first, so absent ones do not take the connection slots.
-        val targets = current.partySpeakers.filter { !it.connected }.sortedByDescending { it.nearby }.map { it.address }
+        // Devices that are around first, so absent ones do not take the connection slots.
+        val targets = current.selected.filter { !it.connected }.sortedByDescending { it.nearby }.map { it.address }
         // The planner already picked the hosts (the user's choice only if that speaker is around).
         // Play on the host of the user's group, else of the largest group, if that host is around.
         fun reachable(group: LinkGroup) = group.host.present || group.host.connectedToPhone
@@ -224,28 +232,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val group = groups.firstOrNull { g -> reachable(g) && g.speakers.any { it.key == current.preferredHost } }
             ?: groups.firstOrNull(::reachable)
             ?: current.plan.best
-        bluetooth.connectAll(targets, playOn = group?.host?.key)
+        // Without a JBL group, keep the audio on the device that is playing now (newly connected
+        // devices otherwise take over as the active output).
+        bluetooth.connectAll(targets, playOn = group?.host?.key ?: current.playing?.address)
     }
 
-    /** Connects the phone to a group's host and makes it the playing speaker. */
+    /** Connects the phone to a JBL group's host and makes it the playing device. */
     fun connectHost(address: String) {
         prefs.setPreferredHost(address)
         bluetooth.connectAll(listOf(address), playOn = address)
     }
 
-    fun setInParty(address: String, included: Boolean) = prefs.setInParty(address, included)
+    fun setSelected(address: String, selected: Boolean) = prefs.setSelected(address, selected)
 
     fun setPreferredHost(address: String?) = prefs.setPreferredHost(address)
 
     fun setModel(address: String, modelId: String?) = prefs.setModelOverride(address, modelId)
 
-    fun setShowAllAudioDevices(show: Boolean) = prefs.setShowAllAudioDevices(show)
-
     fun playTestSound() = container.tonePlayer.play()
 
     fun readStatus(address: String) = readStatuses(listOf(address))
 
-    fun readAllStatuses() = readStatuses(state.value.speakers.filter { it.canReadStatus }.map { it.address })
+    fun readAllStatuses() = readStatuses(state.value.devices.filter { it.canReadStatus }.map { it.address })
 
     fun playLocateSound(address: String) {
         viewModelScope.launch {
@@ -341,34 +349,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return connectedNames[record.name] == 1 && outputs.any { it.name == record.name }
         }
 
-        fun toUi(record: DeviceRecord): SpeakerUi {
+        fun toUi(record: DeviceRecord): DeviceUi {
             val identification = identify(record, env.prefs)
             val model = identification.model
-            return SpeakerUi(
+            // Some speakers with a speakerphone report a headset device class; a known model wins.
+            // A JBL name alone on headphones does not make them a JBL speaker.
+            val isJbl = identification.isJbl && (model != null || !record.isHeadphones)
+            return DeviceUi(
                 address = record.address,
                 name = record.name ?: record.address,
+                kind = if (isJbl) AudioKind.SPEAKER else record.audioKind,
                 model = model,
                 modelSource = identification.source,
-                // Some speakers with a speakerphone report a headset device class; a known model wins.
-                isJbl = identification.isJbl && (model != null || !record.isHeadphones),
+                isJbl = isJbl,
                 bonded = record.bonded,
                 bonding = record.bonding,
                 link = record.link,
                 playing = isPlaying(record),
                 nearby = record.link == LinkState.CONNECTED || record.seenWithin(env.now, NEARBY_WINDOW_MILLIS),
-                inParty = record.address !in env.prefs.excludedFromParty,
+                selected = record.address !in env.prefs.deselected,
                 status = env.statuses[record.address],
-                canReadStatus = model?.control?.let { it in READABLE } ?: identification.isJbl,
+                canReadStatus = isJbl && (model?.control?.let { it in READABLE } ?: true),
             )
         }
 
-        val showAll = env.prefs.showAllAudioDevices
+        // Every Bluetooth audio device; JBL speakers also when their device class is unusual.
+        fun listed(record: DeviceRecord, ui: DeviceUi) = ui.isJbl || record.isAudioDevice
         val all = bt.devices.values.map { it to toUi(it) }
-        val speakers = all
-            .filter { (record, ui) -> record.bonded && (ui.isJbl || (showAll && record.isAudioDevice)) }
+        val devices = all
+            .filter { (record, ui) -> record.bonded && listed(record, ui) }
             .map { it.second }
             .sortedWith(
-                compareByDescending<SpeakerUi> { it.playing }
+                compareByDescending<DeviceUi> { it.playing }
                     .thenByDescending { it.connected }
                     .thenByDescending { it.link == LinkState.CONNECTING }
                     .thenByDescending { it.nearby }
@@ -377,7 +389,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val discovered = all
             .filter { (record, ui) ->
                 !record.bonded && record.discovered && record.seenWithin(env.now, DISCOVERY_WINDOW_MILLIS) &&
-                    (ui.isJbl || (showAll && record.isAudioDevice))
+                    listed(record, ui)
             }
             .sortedByDescending { it.first.rssi ?: Int.MIN_VALUE }
             .map { it.second }
@@ -389,11 +401,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .distinct()
             .sorted()
 
-        val partySpeakers = speakers.filter { it.isJbl && it.inParty }
+        val selected = devices.filter { it.selected }
+        // Only JBL speakers go to the linking planner; the phone's own options work for any device.
+        val jblSpeakers = selected.filter { it.isJbl }
         // Speakers keep their default names ("JBL Flip 6" twice), so add the end of the address.
-        val duplicateNames = partySpeakers.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
+        val duplicateNames = jblSpeakers.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys
         val plan = PartyPlanner.plan(
-            partySpeakers.map {
+            jblSpeakers.map {
                 PlannerSpeaker(
                     key = it.address,
                     name = if (it.name in duplicateNames) "${it.name} (${it.address.takeLast(5)})" else it.name,
@@ -403,26 +417,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     present = it.nearby,
                 )
             },
-            caps.forPlanner(),
-            env.prefs.preferredHost,
+            preferredHostKey = env.prefs.preferredHost,
             previous = lastPlan,
         ).also { lastPlan = it }
         return UiState(
             bluetoothSupported = bluetooth.isSupported,
             permissionsGranted = env.permissions,
             adapter = bt.adapter,
-            speakers = speakers,
+            devices = devices,
             discovered = discovered,
             nearbyNotInPairingMode = nearbyNotInPairingMode,
             scanning = bt.discovering,
-            connectedCount = speakers.count { it.connected },
+            connectedCount = devices.count { it.connected },
             maxConnected = max,
-            playing = speakers.firstOrNull { it.playing },
+            playing = devices.firstOrNull { it.playing },
             canConnectDirectly = HiddenBluetooth.canConnect,
-            partySpeakers = partySpeakers,
+            selected = selected,
+            phoneOptions = phoneOptions(caps.isSamsung, caps.audioSharing, selected.size),
             plan = plan,
             preferredHost = env.prefs.preferredHost,
-            showAllAudioDevices = showAll,
             capabilities = caps,
         )
     }

@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        val speakerActions = SpeakerActions(
+        val deviceActions = DeviceActions(
             requestPermissions = { permissionLauncher.launch(BtPermissions.runtime) },
             openAppSettings = { SystemScreens.openAppSettings(this) },
             enableBluetooth = ::requestEnableBluetooth,
@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
             disconnect = viewModel::disconnect,
             playOn = viewModel::playOn,
             connectAll = viewModel::connectAll,
-            setInParty = viewModel::setInParty,
+            setSelected = viewModel::setSelected,
             setModel = viewModel::setModel,
             readStatus = viewModel::readStatus,
             readAllStatuses = viewModel::readAllStatuses,
@@ -50,10 +50,9 @@ class MainActivity : ComponentActivity() {
             testSound = viewModel::playTestSound,
             openOutputSwitcher = { SystemScreens.openOutputSwitcher(this) },
             openBluetoothSettings = { SystemScreens.openBluetoothSettings(this) },
-            setShowAll = viewModel::setShowAllAudioDevices,
         )
-        val partyActions = PartyActions(
-            setInParty = viewModel::setInParty,
+        val togetherActions = TogetherActions(
+            setSelected = viewModel::setSelected,
             makeHost = viewModel::setPreferredHost,
             connectHost = viewModel::connectHost,
             testSound = viewModel::playTestSound,
@@ -68,7 +67,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             SpeakerLinkTheme {
                 val state by viewModel.state.collectAsStateWithLifecycle()
-                AppRoot(state, viewModel.events, speakerActions, partyActions, infoActions)
+                AppRoot(state, viewModel.events, deviceActions, togetherActions, infoActions)
             }
         }
     }

@@ -89,29 +89,14 @@ data class LinkGroup(
     val size: Int get() = 1 + members.size
 }
 
-/** Ways to reach several speakers that do not depend on the speakers' own linking. */
-enum class Alternative {
-    /** Samsung "Dual Audio": the phone streams to two Bluetooth audio devices at once. */
-    SAMSUNG_DUAL_AUDIO,
-
-    /** Android "Audio sharing" (LE Audio broadcast); works with LE Audio speakers only. */
-    LE_AUDIO_SHARING,
-
-    /** Use the system output switcher to move playback between connected speakers. */
-    SWITCH_OUTPUT,
-}
-
-data class PhoneCapabilities(
-    val isSamsung: Boolean = false,
-    /** The phone can be an LE Audio broadcast source and assistant (Android "Audio sharing"). */
-    val leAudioSharing: Boolean = false,
-)
-
+/**
+ * How the selected speakers can link among themselves. Phone features such as Samsung Dual Audio
+ * or Android Audio sharing work with any Bluetooth audio device and are not part of the plan.
+ */
 data class PartyPlan(
     /** Linkable groups, largest first. */
     val groups: List<LinkGroup>,
     val excluded: List<ExcludedSpeaker>,
-    val alternatives: List<Alternative>,
 ) {
     val best: LinkGroup? get() = groups.firstOrNull()
 
@@ -135,7 +120,6 @@ object PartyPlanner {
 
     fun plan(
         speakers: List<PlannerSpeaker>,
-        capabilities: PhoneCapabilities = PhoneCapabilities(),
         preferredHostKey: String? = null,
         previous: PartyPlan? = null,
     ): PartyPlan {
@@ -185,7 +169,6 @@ object PartyPlanner {
         return PartyPlan(
             groups = groups,
             excluded = excluded.sortedBy { it.reason.ordinal },
-            alternatives = alternatives(unique.size, groups, excluded, capabilities),
         )
     }
 
@@ -403,17 +386,5 @@ object PartyPlanner {
             if (models.any { it.confidence == Confidence.UNVERIFIED }) add(GroupNote.CONTAINS_UNVERIFIED_MODEL)
         }
         return LinkGroup(family, host, members, steps, stereo, notes)
-    }
-
-    private fun alternatives(
-        selected: Int,
-        groups: List<LinkGroup>,
-        excluded: List<ExcludedSpeaker>,
-        capabilities: PhoneCapabilities,
-    ): List<Alternative> = buildList {
-        val everyoneLinked = groups.size == 1 && excluded.isEmpty()
-        if (capabilities.isSamsung && selected >= 2 && !everyoneLinked) add(Alternative.SAMSUNG_DUAL_AUDIO)
-        if (capabilities.leAudioSharing && selected >= 2 && !everyoneLinked) add(Alternative.LE_AUDIO_SHARING)
-        if (selected >= 1) add(Alternative.SWITCH_OUTPUT)
     }
 }

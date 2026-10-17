@@ -26,7 +26,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,6 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,8 +51,8 @@ import io.github.cyrus_sch.speakerlink.core.AudioChannel
 import io.github.cyrus_sch.speakerlink.core.IdentificationSource
 import io.github.cyrus_sch.speakerlink.status.SpeakerStatus
 
-/** Everything the Speakers screen can ask for. */
-class SpeakerActions(
+/** Everything the Devices screen can ask for. */
+class DeviceActions(
     val requestPermissions: () -> Unit,
     val openAppSettings: () -> Unit,
     val enableBluetooth: () -> Unit,
@@ -62,7 +63,7 @@ class SpeakerActions(
     val disconnect: (String) -> Unit,
     val playOn: (String) -> Unit,
     val connectAll: () -> Unit,
-    val setInParty: (String, Boolean) -> Unit,
+    val setSelected: (String, Boolean) -> Unit,
     val setModel: (String, String?) -> Unit,
     val readStatus: (String) -> Unit,
     val readAllStatuses: () -> Unit,
@@ -70,15 +71,14 @@ class SpeakerActions(
     val testSound: () -> Unit,
     val openOutputSwitcher: () -> Unit,
     val openBluetoothSettings: () -> Unit,
-    val setShowAll: (Boolean) -> Unit,
 )
 
 @Composable
-fun SpeakersScreen(state: UiState, actions: SpeakerActions, contentPadding: PaddingValues) {
+fun DevicesScreen(state: UiState, actions: DeviceActions, contentPadding: PaddingValues) {
     var modelDialogFor by rememberSaveable { mutableStateOf<String?>(null) }
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth().testTag("speakers_list"),
+        modifier = Modifier.fillMaxWidth().testTag("devices_list"),
         contentPadding = PaddingValues(
             start = 16.dp,
             end = 16.dp,
@@ -101,8 +101,8 @@ fun SpeakersScreen(state: UiState, actions: SpeakerActions, contentPadding: Padd
 
         item {
             SectionHeader(stringResource(R.string.section_my_speakers)) {
-                val disconnected = state.partySpeakers.count { !it.connected }
-                if (state.partySpeakers.size >= 2 && disconnected > 0 && state.adapter == AdapterState.ON) {
+                val disconnected = state.selected.count { !it.connected }
+                if (state.selected.size >= 2 && disconnected > 0 && state.adapter == AdapterState.ON) {
                     TextButton(onClick = actions.connectAll) {
                         AppIcon(R.drawable.ic_link, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
@@ -111,13 +111,14 @@ fun SpeakersScreen(state: UiState, actions: SpeakerActions, contentPadding: Padd
                 }
             }
         }
-        if (state.speakers.isEmpty()) {
+        if (state.devices.isEmpty()) {
             item { BodyText(stringResource(R.string.no_speakers), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        items(state.speakers, key = { it.address }) { speaker ->
-            SpeakerCard(speaker, state.adapter == AdapterState.ON, actions, onSetModel = { modelDialogFor = speaker.address })
+        items(state.devices, key = { it.address }) { device ->
+            DeviceCard(device, state.adapter == AdapterState.ON, actions, onSetModel = { modelDialogFor = device.address })
         }
-        if (state.speakers.any { it.canReadStatus } && state.permissionsGranted) {
+        // JBL extra: battery and firmware over JBL's control protocol.
+        if (state.devices.any { it.canReadStatus } && state.permissionsGranted) {
             item {
                 Column {
                     TextButton(onClick = actions.readAllStatuses) {
@@ -161,11 +162,8 @@ fun SpeakersScreen(state: UiState, actions: SpeakerActions, contentPadding: Padd
                 }
             }
         }
-        items(state.discovered, key = { "found-" + it.address }) { speaker ->
-            DiscoveredCard(speaker, onPair = { actions.pair(speaker.address) })
-        }
-        if (!state.scanning && state.discovered.isEmpty() && state.nearbyNotInPairingMode.isEmpty()) {
-            // Nothing found (yet): the hint above already says what to do.
+        items(state.discovered, key = { "found-" + it.address }) { device ->
+            DiscoveredCard(device, onPair = { actions.pair(device.address) })
         }
         if (state.nearbyNotInPairingMode.isNotEmpty()) {
             item {
@@ -175,23 +173,15 @@ fun SpeakersScreen(state: UiState, actions: SpeakerActions, contentPadding: Padd
                 )
             }
         }
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(stringResource(R.string.show_all_devices), modifier = Modifier.weight(1f))
-                Switch(checked = state.showAllAudioDevices, onCheckedChange = actions.setShowAll)
-            }
-        }
     }
 
-    val dialogSpeaker = state.speakers.firstOrNull { it.address == modelDialogFor }
-    if (dialogSpeaker != null) {
+    // The model picker is a JBL extra.
+    val dialogDevice = state.devices.firstOrNull { it.address == modelDialogFor && it.isJbl }
+    if (dialogDevice != null) {
         ModelPickerDialog(
-            current = dialogSpeaker.model.takeIf { dialogSpeaker.modelSource == IdentificationSource.USER },
+            current = dialogDevice.model.takeIf { dialogDevice.modelSource == IdentificationSource.USER },
             onPick = { model ->
-                actions.setModel(dialogSpeaker.address, model?.id)
+                actions.setModel(dialogDevice.address, model?.id)
                 modelDialogFor = null
             },
             onDismiss = { modelDialogFor = null },
@@ -200,7 +190,7 @@ fun SpeakersScreen(state: UiState, actions: SpeakerActions, contentPadding: Padd
 }
 
 @Composable
-private fun PermissionCard(actions: SpeakerActions) {
+private fun PermissionCard(actions: DeviceActions) {
     var asked by rememberSaveable { mutableStateOf(false) }
     InfoCard(stringResource(R.string.permission_title), R.drawable.ic_bluetooth, tonal = true) {
         val body = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) R.string.permission_body else R.string.permission_body_legacy
@@ -221,7 +211,7 @@ private fun PermissionCard(actions: SpeakerActions) {
 }
 
 @Composable
-private fun BluetoothOffCard(adapter: AdapterState, actions: SpeakerActions) {
+private fun BluetoothOffCard(adapter: AdapterState, actions: DeviceActions) {
     InfoCard(stringResource(R.string.bluetooth_off_title), R.drawable.ic_bluetooth_disabled, tonal = true) {
         BodyText(stringResource(R.string.bluetooth_off_body))
         Button(onClick = actions.enableBluetooth, enabled = adapter == AdapterState.OFF) {
@@ -232,14 +222,14 @@ private fun BluetoothOffCard(adapter: AdapterState, actions: SpeakerActions) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StatusCard(state: UiState, actions: SpeakerActions) {
+private fun StatusCard(state: UiState, actions: DeviceActions) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AppIcon(R.drawable.ic_speaker_group, modifier = Modifier.size(28.dp))
+                AppIcon(R.drawable.ic_graphic_eq, modifier = Modifier.size(28.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -277,11 +267,12 @@ private fun StatusCard(state: UiState, actions: SpeakerActions) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SpeakerCard(speaker: SpeakerUi, bluetoothOn: Boolean, actions: SpeakerActions, onSetModel: () -> Unit) {
+private fun DeviceCard(device: DeviceUi, bluetoothOn: Boolean, actions: DeviceActions, onSetModel: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
-    val highlighted = speaker.playing
+    val highlighted = device.playing
+    val stateColor = if (device.connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
     Card(
-        modifier = Modifier.fillMaxWidth().testTag("speaker_card"),
+        modifier = Modifier.fillMaxWidth().testTag("device_card"),
         colors = if (highlighted) {
             CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         } else {
@@ -290,55 +281,60 @@ private fun SpeakerCard(speaker: SpeakerUi, bluetoothOn: Boolean, actions: Speak
     ) {
         Column(Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AppIcon(
-                    if (speaker.playing) R.drawable.ic_graphic_eq else R.drawable.ic_speaker,
-                    modifier = Modifier.size(28.dp),
-                    tint = if (speaker.connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                AppIcon(device.kind.iconRes(), modifier = Modifier.size(28.dp), tint = stateColor)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        speaker.name,
+                        device.name,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        modelLine(speaker),
+                        kindLine(device),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(
-                        stateLine(speaker),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (speaker.playing) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (speaker.connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    speaker.status?.let { StatusLine(it) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (device.playing) {
+                            AppIcon(R.drawable.ic_graphic_eq, modifier = Modifier.size(16.dp), tint = stateColor)
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        Text(
+                            stateLine(device),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (device.playing) FontWeight.SemiBold else FontWeight.Normal,
+                            color = stateColor,
+                        )
+                    }
+                    device.status?.let { StatusLine(it) }
                 }
-                if (speaker.isJbl) {
-                    Checkbox(
-                        checked = speaker.inParty,
-                        onCheckedChange = { actions.setInParty(speaker.address, it) },
-                    )
-                }
+                val selectLabel = stringResource(R.string.in_party)
+                Checkbox(
+                    checked = device.selected,
+                    onCheckedChange = { actions.setSelected(device.address, it) },
+                    modifier = Modifier.semantics { contentDescription = selectLabel },
+                )
                 Box {
                     IconButton(onClick = { menuOpen = true }) {
                         AppIcon(R.drawable.ic_more_vert, stringResource(R.string.action_more))
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.menu_set_model)) },
-                            onClick = { menuOpen = false; onSetModel() },
-                        )
-                        if (speaker.canReadStatus) {
+                        // JBL extras: model picker, battery and info, locate sound.
+                        if (device.isJbl) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_set_model)) },
+                                onClick = { menuOpen = false; onSetModel() },
+                            )
+                        }
+                        if (device.canReadStatus) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_read_status)) },
-                                onClick = { menuOpen = false; actions.readStatus(speaker.address) },
+                                onClick = { menuOpen = false; actions.readStatus(device.address) },
                             )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_locate)) },
-                                onClick = { menuOpen = false; actions.locate(speaker.address) },
+                                onClick = { menuOpen = false; actions.locate(device.address) },
                             )
                         }
                         DropdownMenuItem(
@@ -352,24 +348,24 @@ private fun SpeakerCard(speaker: SpeakerUi, bluetoothOn: Boolean, actions: Speak
                 modifier = Modifier.padding(start = 40.dp, top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                when (speaker.link) {
+                when (device.link) {
                     LinkState.CONNECTED -> {
-                        if (!speaker.playing) {
-                            FilledTonalButton(onClick = { actions.playOn(speaker.address) }, enabled = bluetoothOn) {
+                        if (!device.playing) {
+                            FilledTonalButton(onClick = { actions.playOn(device.address) }, enabled = bluetoothOn) {
                                 AppIcon(R.drawable.ic_play_arrow, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text(stringResource(R.string.action_play_here))
                             }
                         }
-                        TextButton(onClick = { actions.disconnect(speaker.address) }, enabled = bluetoothOn) {
+                        TextButton(onClick = { actions.disconnect(device.address) }, enabled = bluetoothOn) {
                             Text(stringResource(R.string.action_disconnect))
                         }
                     }
                     LinkState.CONNECTING, LinkState.DISCONNECTING -> {
-                        TextButton(onClick = {}, enabled = false) { Text(stateLine(speaker)) }
+                        TextButton(onClick = {}, enabled = false) { Text(stateLine(device)) }
                     }
                     LinkState.DISCONNECTED -> {
-                        FilledTonalButton(onClick = { actions.connect(speaker.address) }, enabled = bluetoothOn) {
+                        FilledTonalButton(onClick = { actions.connect(device.address) }, enabled = bluetoothOn) {
                             AppIcon(R.drawable.ic_bluetooth_connected, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(4.dp))
                             Text(stringResource(R.string.action_connect))
@@ -381,23 +377,30 @@ private fun SpeakerCard(speaker: SpeakerUi, bluetoothOn: Boolean, actions: Speak
     }
 }
 
+/** "Headphones", "Speaker", or for a JBL speaker "Speaker · JBL Flip 6 · PartyBoost". */
 @Composable
-private fun modelLine(speaker: SpeakerUi): String {
-    val model = speaker.model ?: return stringResource(R.string.model_unknown)
-    val base = "${model.titleWithConfidence()} · ${model.familyLabel()}"
-    return if (speaker.modelSource == IdentificationSource.USER) "$base (${stringResource(R.string.model_set_by_you)})" else base
+private fun kindLine(device: DeviceUi): String {
+    val kind = stringResource(device.kind.labelRes())
+    return if (device.isJbl) "$kind · ${modelLine(device)}" else kind
 }
 
 @Composable
-private fun stateLine(speaker: SpeakerUi): String {
+private fun modelLine(device: DeviceUi): String {
+    val model = device.model ?: return stringResource(R.string.model_unknown)
+    val base = "${model.titleWithConfidence()} · ${model.familyLabel()}"
+    return if (device.modelSource == IdentificationSource.USER) "$base (${stringResource(R.string.model_set_by_you)})" else base
+}
+
+@Composable
+private fun stateLine(device: DeviceUi): String {
     val base = when {
-        speaker.playing -> stringResource(R.string.state_playing)
-        speaker.link == LinkState.CONNECTED -> stringResource(R.string.state_connected)
-        speaker.link == LinkState.CONNECTING -> stringResource(R.string.state_connecting)
-        speaker.link == LinkState.DISCONNECTING -> stringResource(R.string.state_disconnecting)
+        device.playing -> stringResource(R.string.state_playing)
+        device.link == LinkState.CONNECTED -> stringResource(R.string.state_connected)
+        device.link == LinkState.CONNECTING -> stringResource(R.string.state_connecting)
+        device.link == LinkState.DISCONNECTING -> stringResource(R.string.state_disconnecting)
         else -> stringResource(R.string.state_disconnected)
     }
-    return if (!speaker.connected && speaker.nearby) "$base · ${stringResource(R.string.state_nearby)}" else base
+    return if (!device.connected && device.nearby) "$base · ${stringResource(R.string.state_nearby)}" else base
 }
 
 @Composable
@@ -449,16 +452,16 @@ private fun batteryIcon(percent: Int?): Int = when {
 }
 
 @Composable
-private fun DiscoveredCard(speaker: SpeakerUi, onPair: () -> Unit) {
+private fun DiscoveredCard(device: DeviceUi, onPair: () -> Unit) {
     Card(Modifier.fillMaxWidth().testTag("discovered_card")) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            AppIcon(R.drawable.ic_speaker, modifier = Modifier.size(24.dp))
+            AppIcon(device.kind.iconRes(), modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(speaker.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(modelLine(speaker), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(device.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(kindLine(device), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (speaker.bonding) {
+            if (device.bonding) {
                 Text(stringResource(R.string.pairing), style = MaterialTheme.typography.bodyMedium)
             } else {
                 Button(onClick = onPair) { Text(stringResource(R.string.action_pair)) }

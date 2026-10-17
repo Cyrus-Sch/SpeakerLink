@@ -2,44 +2,43 @@
 <resources>
     <string name="app_name" translatable="false">SpeakerLink</string>
 
-    <string name="tab_speakers">Speakers</string>
-    <string name="tab_party">Party</string>
+    <string name="tab_speakers">Devices</string>
+    <string name="tab_party">Together</string>
     <string name="tab_info">Info</string>
 
     <!-- Permissions and Bluetooth state -->
     <string name="permission_title">Allow access to nearby devices</string>
-    <string name="permission_body">SpeakerLink needs the \"Nearby devices\" permission to find, pair and connect your speakers. It never uses it to work out your location, and the app has no internet access.</string>
+    <string name="permission_body">SpeakerLink needs the \"Nearby devices\" permission to find, pair and connect your speakers and headphones. It never uses it to work out your location, and the app has no internet access.</string>
     <string name="permission_body_legacy">On this Android version, finding Bluetooth devices requires the location permission. SpeakerLink never uses your location, and the app has no internet access.</string>
     <string name="permission_grant">Allow</string>
     <string name="permission_open_settings">Open app settings</string>
     <string name="bluetooth_off_title">Bluetooth is off</string>
-    <string name="bluetooth_off_body">Turn on Bluetooth to see and connect your speakers.</string>
+    <string name="bluetooth_off_body">Turn on Bluetooth to see and connect your speakers and headphones.</string>
     <string name="bluetooth_turn_on">Turn on</string>
     <string name="bluetooth_unavailable">This device has no Bluetooth.</string>
 
     <!-- Status card -->
     <plurals name="status_connected">
-        <item quantity="one">%1$d speaker connected</item>
-        <item quantity="other">%1$d speakers connected</item>
+        <item quantity="one">%1$d device connected</item>
+        <item quantity="other">%1$d devices connected</item>
     </plurals>
     <string name="status_connected_limit">Up to %1$d Bluetooth audio devices can be connected at once.</string>
     <string name="status_playing_on">Playing on %1$s</string>
-    <string name="status_playing_none">No speaker is playing right now</string>
-    <string name="status_one_output">Android sends music to one Bluetooth speaker at a time. To play on several JBL speakers together, link them on the Party tab.</string>
+    <string name="status_playing_none">No Bluetooth device is playing right now</string>
+    <string name="status_one_output">Android plays on one Bluetooth device at a time. The Together tab shows ways to hear it on several.</string>
     <string name="action_test_sound">Test sound</string>
-    <string name="action_switch_output">Choose speaker</string>
+    <string name="action_switch_output">Choose device</string>
 
-    <!-- Speakers list -->
-    <string name="section_my_speakers">My speakers</string>
-    <string name="section_add_speakers">Add speakers</string>
-    <string name="no_speakers">No paired JBL speakers yet. Tap Scan and put a speaker in pairing mode.</string>
+    <!-- Devices list -->
+    <string name="section_my_speakers">My devices</string>
+    <string name="section_add_speakers">Add a device</string>
+    <string name="no_speakers">No paired speakers or headphones yet. Tap Scan and put your device in pairing mode.</string>
     <string name="action_connect_all">Connect all</string>
     <string name="action_scan">Scan</string>
     <string name="action_stop">Stop</string>
-    <string name="scanning">Searching for speakers in pairing mode…</string>
-    <string name="scan_hint">Hold the speaker\'s Bluetooth button until its light blinks (pairing mode), then tap Scan.</string>
+    <string name="scanning">Searching for devices in pairing mode…</string>
+    <string name="scan_hint">Put your speaker or headphones in pairing mode (usually by holding the Bluetooth or power button until a light blinks), then tap Scan.</string>
     <string name="nearby_not_pairable">Also nearby, but not in pairing mode: %1$s</string>
-    <string name="no_discovered">No speakers in pairing mode found.</string>
     <string name="action_pair">Pair</string>
     <string name="pairing">Pairing…</string>
     <string name="state_playing">Playing</string>
@@ -52,14 +51,16 @@
     <string name="action_disconnect">Disconnect</string>
     <string name="action_play_here">Play here</string>
     <string name="action_more">More options</string>
-    <string name="menu_set_model">Set model…</string>
+    <string name="menu_set_model">Set JBL model…</string>
     <string name="menu_read_status">Read battery and info</string>
     <string name="menu_locate">Play locate sound</string>
     <string name="menu_bluetooth_settings">Bluetooth settings</string>
-    <string name="in_party">Include in party</string>
-    <string name="model_unknown">Unknown model</string>
+    <string name="in_party">Use together</string>
+    <string name="model_unknown">Unknown JBL model</string>
     <string name="model_set_by_you">set by you</string>
-    <string name="show_all_devices">Show all audio devices</string>
+    <string name="kind_headphones">Headphones</string>
+    <string name="kind_speaker">Speaker</string>
+    <string name="kind_other">Audio device</string>
     <string name="battery_level">%1$d%% battery</string>
     <string name="battery_charging">%1$d%% battery · charging</string>
     <string name="status_reading">Reading speaker info…</string>
@@ -70,13 +71,12 @@
     <string name="status_firmware">Firmware %1$s</string>
     <string name="status_channel_left">Left channel</string>
     <string name="status_channel_right">Right channel</string>
-    <string name="status_channel_stereo">Stereo</string>
     <string name="status_no_details">The speaker answered but did not report its battery.</string>
     <string name="status_beta_hint">Battery and info use JBL\'s unofficial control protocol and may not work on every model.</string>
-    <string name="action_read_all">Read battery of all speakers</string>
+    <string name="action_read_all">Read battery of JBL speakers</string>
 
-    <!-- Model picker -->
-    <string name="model_dialog_title">Which model is this?</string>
+    <!-- JBL model picker -->
+    <string name="model_dialog_title">Which JBL model is this?</string>
     <string name="model_dialog_body">Pick the model if SpeakerLink got it wrong, for example after the speaker was renamed.</string>
     <string name="model_dialog_auto">Detect automatically</string>
     <string name="cancel">Cancel</string>
@@ -93,11 +93,16 @@
     <string name="unverified">unverified</string>
     <string name="family_max">Up to %1$d speakers in one group</string>
 
-    <!-- Party -->
-    <string name="party_intro_title">Play on all speakers</string>
-    <string name="party_intro_body">Your phone streams to one speaker, the host. The other JBL speakers get the music from the host over their own link (PartyBoost, Auracast or Connect+). Speakers of different link systems can\'t be in the same group.</string>
-    <string name="party_select_title">Speakers in this party</string>
-    <string name="party_select_empty">Pair your JBL speakers on the Speakers tab first.</string>
+    <!-- Together -->
+    <string name="party_intro_title">Hear it together</string>
+    <string name="party_intro_body">Play the same audio on several speakers or headphones. Depending on your phone, it can play on two devices at once itself, and many speakers can link up with each other.</string>
+    <string name="party_select_title">Use together</string>
+    <string name="party_select_empty">Pair your speakers or headphones on the Devices tab first.</string>
+    <string name="together_phone_title">With this phone</string>
+    <string name="together_select_two">Select at least two devices to see how this phone can play on them together.</string>
+    <string name="together_speakers_title">Speakers that link themselves</string>
+    <string name="together_speakers_body">Many speakers can link up with each other, usually within the same brand: with a party or stereo button, or in the maker\'s app. Connect your phone to one of them and link the rest to it. They all play what your phone plays.</string>
+    <string name="party_jbl_body">JBL speakers: your phone streams to one speaker, the host, and the others get the music from it over PartyBoost, Auracast or Connect+. Speakers of different link systems can\'t be in the same group.</string>
     <string name="party_group_title">%1$s group</string>
     <plurals name="party_group_size">
         <item quantity="one">%1$d speaker</item>
@@ -124,27 +129,26 @@
     <string name="note_partybox_firmware">Newer PartyBoxes get Auracast and linking with other speakers through firmware updates in JBL\'s PartyBox app.</string>
     <string name="note_unverified">Linking support of at least one model here is not confirmed.</string>
     <string name="party_mixed_warning">These speakers use different link systems, so they can\'t all play in one group.</string>
-    <string name="party_excluded_title">Can\'t join a group</string>
-    <string name="excluded_unknown_model">Unknown model. Set the model in the speaker\'s menu on the Speakers tab.</string>
+    <string name="party_excluded_title">JBL speakers that can\'t join a group</string>
+    <string name="excluded_unknown_model">Unknown model. Set the model in the speaker\'s menu on the Devices tab.</string>
     <string name="excluded_linking_unknown">It\'s unclear whether this model can link with other speakers.</string>
     <string name="excluded_no_linking">This model can\'t link with other speakers.</string>
     <string name="excluded_no_partner">No other selected speaker uses %1$s.</string>
     <string name="excluded_incompatible_model">Other speakers use %1$s too, but this model links only with certain models. See the list on the Info tab.</string>
     <string name="excluded_group_full">The %1$s group is full (at most %2$d speakers).</string>
     <string name="party_test_sound_hint">Tip: play the test sound. Every linked speaker should chime.</string>
-    <string name="alternatives_title">Other ways to use several speakers</string>
     <string name="alt_samsung_title">Samsung Dual Audio</string>
-    <string name="alt_samsung_body">Galaxy phones can stream to two Bluetooth speakers at once, even of different generations. Connect both, open the media output panel and select both speakers.</string>
-    <string name="alt_le_title">Audio sharing (LE Audio)</string>
-    <string name="alt_le_body">Android can share audio with up to two LE Audio devices. Most JBL portables can\'t receive it, so it is mainly for LE Audio headphones and speakers.</string>
-    <string name="alt_switch_title">Switch between speakers</string>
-    <string name="alt_switch_body">Keep several speakers connected and move the music between them with one tap on the Speakers tab.</string>
-    <string name="action_open_output_switcher">Open output switcher</string>
+    <string name="alt_samsung_body">This Galaxy phone can play on two Bluetooth audio devices at once: two speakers, two headphones or one of each. Connect both, open the media output panel and select both.</string>
+    <string name="alt_le_title">Audio sharing</string>
+    <string name="alt_le_body">This phone can share its audio with up to two LE Audio headphones or speakers that support Auracast. Other devices play one at a time: keep them connected and switch with Play here on the Devices tab.</string>
+    <string name="alt_switch_title">One device at a time</string>
+    <string name="alt_switch_body">This phone plays on one Bluetooth audio device at a time. Keep several connected and switch between them with Play here on the Devices tab, or use speakers that link up themselves (below).</string>
+    <string name="action_open_output_switcher">Open media output</string>
     <string name="action_open_audio_sharing">Open Audio sharing</string>
 
     <!-- Info -->
     <string name="info_about_title">About SpeakerLink</string>
-    <string name="info_about_body">SpeakerLink pairs and connects several JBL Bluetooth speakers, shows which one is playing, and walks you through linking them with PartyBoost, Auracast or Connect+.</string>
+    <string name="info_about_body">SpeakerLink connects your Bluetooth speakers and headphones, shows which one is playing and switches between them with one tap. The Together tab shows how to hear the same audio on several devices at once. JBL speakers get extras: model, battery and firmware, a locate sound and step-by-step linking.</string>
     <string name="info_version">Version %1$s</string>
     <string name="info_disclaimer">SpeakerLink is an independent open-source app. It is not affiliated with, endorsed or sponsored by JBL or HARMAN International. JBL, PartyBoost and Connect+ are trademarks of HARMAN International Industries, Incorporated. Auracast is a trademark of the Bluetooth SIG.</string>
     <string name="info_privacy_title">Privacy</string>
@@ -155,16 +159,16 @@
     <string name="info_android">Android %1$s (API %2$d)</string>
     <string name="info_max_devices">Audio devices connected at once: up to %1$d</string>
     <string name="info_max_devices_unknown">Audio devices connected at once: unknown</string>
-    <string name="info_max_devices_hint">If only one speaker stays connected, raise \"Maximum connected Bluetooth audio devices\" in Developer options.</string>
+    <string name="info_max_devices_hint">If only one device stays connected, raise \"Maximum connected Bluetooth audio devices\" in Developer options.</string>
     <string name="action_developer_options">Developer options</string>
     <string name="info_le_audio">LE Audio: %1$s</string>
     <string name="info_le_broadcast">Audio sharing (LE Audio broadcast): %1$s</string>
-    <string name="info_direct_connect">Connecting speakers from the app: %1$s</string>
+    <string name="info_direct_connect">Connecting devices from the app: %1$s</string>
     <string name="yes">yes</string>
     <string name="no">no</string>
     <string name="unknown">unknown</string>
-    <string name="info_compat_title">Which speakers link together</string>
-    <string name="info_compat_body">Speakers link only with speakers of the same system. Models marked unverified are based on limited sources.</string>
+    <string name="info_compat_title">Which JBL speakers link together</string>
+    <string name="info_compat_body">JBL speakers link only with speakers of the same system. Models marked unverified are based on limited sources.</string>
 
     <!-- Snackbars -->
     <string name="event_paired">Paired with %1$s</string>
@@ -172,8 +176,8 @@
     <string name="event_connected">%1$s connected</string>
     <string name="event_connect_failed">Couldn\'t connect %1$s. Is it switched on and close by?</string>
     <string name="event_connect_limit">Couldn\'t connect %1$s: the phone\'s limit of connected audio devices is reached.</string>
-    <string name="event_needs_settings">This phone doesn\'t let apps connect speakers. Connect %1$s in Bluetooth settings.</string>
-    <string name="event_needs_output_switcher">Choose %1$s in the output switcher.</string>
+    <string name="event_needs_settings">This phone doesn\'t let apps connect Bluetooth devices. Connect %1$s in Bluetooth settings.</string>
+    <string name="event_needs_output_switcher">Choose %1$s in the media output panel.</string>
     <string name="event_scan_failed">Couldn\'t start the search.</string>
     <string name="event_scan_location_off">Turn on location services. Android 11 and lower need them to find Bluetooth devices.</string>
     <string name="event_bluetooth_off">Turn on Bluetooth first.</string>

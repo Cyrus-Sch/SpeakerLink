@@ -37,7 +37,6 @@ class PartyPlannerTest {
         assertEquals(listOf(flip6, pulse5), group.members)
         assertFalse(group.stereoPairPossible)
         assertEquals(LinkStep.PressOnMembers(LinkFamily.PARTYBOOST, listOf(flip6, pulse5)), group.steps[3])
-        assertEquals(listOf(Alternative.SWITCH_OUTPUT), plan.alternatives)
     }
 
     @Test
@@ -368,19 +367,6 @@ class PartyPlannerTest {
     }
 
     @Test
-    fun phoneSideAlternativesOnlyWhenLinkingIsNotEnough() {
-        val samsung = PhoneCapabilities(isSamsung = true, leAudioSharing = true)
-        val incompatible = PartyPlanner.plan(listOf(speaker("flip6"), speaker("go3")), samsung)
-        assertEquals(
-            listOf(Alternative.SAMSUNG_DUAL_AUDIO, Alternative.LE_AUDIO_SHARING, Alternative.SWITCH_OUTPUT),
-            incompatible.alternatives,
-        )
-
-        val compatible = PartyPlanner.plan(listOf(speaker("flip6"), speaker("flip5")), samsung)
-        assertEquals(listOf(Alternative.SWITCH_OUTPUT), compatible.alternatives)
-    }
-
-    @Test
     fun duplicateKeysAreIgnoredAndNotesCollected() {
         val charge3 = speaker("charge3")
         val plan = PartyPlanner.plan(listOf(charge3, charge3, speaker("flip4")))
@@ -393,7 +379,7 @@ class PartyPlannerTest {
     fun emptySelection() {
         val plan = PartyPlanner.plan(emptyList())
         assertTrue(plan.groups.isEmpty())
-        assertTrue(plan.alternatives.isEmpty())
+        assertTrue(plan.excluded.isEmpty())
         assertFalse(plan.everyoneInOneGroup)
     }
 }

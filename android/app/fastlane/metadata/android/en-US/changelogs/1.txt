@@ -1,6 +1,6 @@
 First release:
-- Find, pair and connect several JBL speakers at once
-- See which speaker is playing and switch with one tap
-- Party planner for PartyBoost, Auracast, Connect+ and PartyBox TWS
-- Test sound, output switcher and Audio sharing shortcuts
-- Battery and firmware of many JBL portables (beta)
+- Connect several Bluetooth speakers and headphones at once
+- See which device is playing and switch with one tap
+- Together tab: Samsung Dual Audio, Android Audio sharing and speakers that link themselves
+- Test sound and output switcher shortcuts
+- JBL extras: model detection, linking planner (PartyBoost, Auracast, Connect+, PartyBox TWS), battery and firmware (beta)

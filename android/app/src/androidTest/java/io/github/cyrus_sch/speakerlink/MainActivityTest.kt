@@ -26,18 +26,18 @@ class MainActivityTest {
 
     @Test
     fun allTabsRender() {
-        compose.onNodeWithTag("speakers_list").assertIsDisplayed()
-        compose.onNodeWithTag("speakers_list").performScrollToNode(hasTestTag("scan_button"))
+        compose.onNodeWithTag("devices_list").assertIsDisplayed()
+        compose.onNodeWithTag("devices_list").performScrollToNode(hasTestTag("scan_button"))
         compose.onNodeWithTag("scan_button").assertIsDisplayed()
 
-        compose.onNodeWithTag("tab_party").performClick()
-        compose.onNodeWithTag("party_list").assertIsDisplayed()
+        compose.onNodeWithTag("tab_together").performClick()
+        compose.onNodeWithTag("together_list").assertIsDisplayed()
 
         compose.onNodeWithTag("tab_info").performClick()
         compose.onNodeWithTag("info_list").performScrollToNode(hasTestTag("disclaimer"))
         compose.onNodeWithTag("disclaimer").assertIsDisplayed()
 
-        compose.onNodeWithTag("tab_speakers").performClick()
-        compose.onNodeWithTag("speakers_list").assertIsDisplayed()
+        compose.onNodeWithTag("tab_devices").performClick()
+        compose.onNodeWithTag("devices_list").assertIsDisplayed()
     }
 }

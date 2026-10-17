@@ -15,7 +15,6 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresApi
-import io.github.cyrus_sch.speakerlink.core.PhoneCapabilities
 
 /** Ways out to system screens for the things an app is not allowed to do itself. */
 object SystemScreens {
@@ -33,7 +32,7 @@ object SystemScreens {
     fun openBluetoothSettings(context: Context): Boolean = start(context, Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
 
     /**
-     * Opens the system "media output" switcher where the user picks the speaker that plays (and,
+     * Opens the system "media output" switcher where the user picks the device that plays (and,
      * on Samsung phones, can turn on Dual Audio). Same fallback chain as AndroidX MediaRouter's
      * SystemOutputSwitcherDialogController, ending at the Bluetooth settings.
      */
@@ -98,7 +97,7 @@ object SystemScreens {
     }
 }
 
-/** What this phone offers for multi-speaker playback, shown on the Info screen. */
+/** What this phone offers for playing on several Bluetooth audio devices (Together and Info tabs). */
 data class DeviceCapabilities(
     val manufacturer: String,
     val model: String,
@@ -114,8 +113,6 @@ data class DeviceCapabilities(
     /** Android "Audio sharing" needs Android 16 and both LE broadcast roles. */
     val audioSharing: Boolean
         get() = sdkInt >= Build.VERSION_CODES.BAKLAVA && leBroadcastSource == true && leBroadcastAssistant == true
-
-    fun forPlanner() = PhoneCapabilities(isSamsung = isSamsung, leAudioSharing = audioSharing)
 
     companion object {
         fun read(context: Context): DeviceCapabilities {

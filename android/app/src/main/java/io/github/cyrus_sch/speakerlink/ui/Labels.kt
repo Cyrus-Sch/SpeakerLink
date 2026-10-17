@@ -1,9 +1,11 @@
 package io.github.cyrus_sch.speakerlink.ui
 
+import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import io.github.cyrus_sch.speakerlink.R
+import io.github.cyrus_sch.speakerlink.bluetooth.AudioKind
 import io.github.cyrus_sch.speakerlink.bluetooth.BluetoothEvent
 import io.github.cyrus_sch.speakerlink.core.Confidence
 import io.github.cyrus_sch.speakerlink.core.ExcludedSpeaker
@@ -14,6 +16,20 @@ import io.github.cyrus_sch.speakerlink.core.LinkStep
 import io.github.cyrus_sch.speakerlink.core.PlannerSpeaker
 import io.github.cyrus_sch.speakerlink.core.SpeakerModel
 import io.github.cyrus_sch.speakerlink.status.SpeakerStatus
+
+@StringRes
+fun AudioKind.labelRes(): Int = when (this) {
+    AudioKind.HEADPHONES -> R.string.kind_headphones
+    AudioKind.SPEAKER -> R.string.kind_speaker
+    AudioKind.OTHER -> R.string.kind_other
+}
+
+@DrawableRes
+fun AudioKind.iconRes(): Int = when (this) {
+    AudioKind.HEADPHONES -> R.drawable.ic_headphones
+    AudioKind.SPEAKER -> R.drawable.ic_speaker
+    AudioKind.OTHER -> R.drawable.ic_volume_up
+}
 
 @StringRes
 fun LinkFamily.labelRes(): Int = when (this) {

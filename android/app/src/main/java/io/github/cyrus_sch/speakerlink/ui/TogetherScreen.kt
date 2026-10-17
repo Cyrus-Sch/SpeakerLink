@@ -30,11 +30,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.cyrus_sch.speakerlink.R
-import io.github.cyrus_sch.speakerlink.core.Alternative
 import io.github.cyrus_sch.speakerlink.core.LinkGroup
 
-class PartyActions(
-    val setInParty: (String, Boolean) -> Unit,
+class TogetherActions(
+    val setSelected: (String, Boolean) -> Unit,
     val makeHost: (String) -> Unit,
     val connectHost: (String) -> Unit,
     val testSound: () -> Unit,
@@ -42,12 +41,18 @@ class PartyActions(
     val openAudioSharing: () -> Unit,
 )
 
+/**
+ * Hearing the same audio on several devices: first what the phone itself can do (for any kind of
+ * device), then speakers that link up among themselves, with step-by-step plans for JBL speakers.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun PartyScreen(state: UiState, actions: PartyActions, contentPadding: PaddingValues) {
+fun TogetherScreen(state: UiState, actions: TogetherActions, contentPadding: PaddingValues) {
     val plan = state.plan
+    // A single JBL speaker has nothing to link with: leave the JBL plan out until there are two.
+    val showJblPlan = state.selected.count { it.isJbl } >= 2
     LazyColumn(
-        modifier = Modifier.fillMaxWidth().testTag("party_list"),
+        modifier = Modifier.fillMaxWidth().testTag("together_list"),
         contentPadding = PaddingValues(
             start = 16.dp,
             end = 16.dp,
@@ -57,27 +62,27 @@ fun PartyScreen(state: UiState, actions: PartyActions, contentPadding: PaddingVa
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            InfoCard(stringResource(R.string.party_intro_title), R.drawable.ic_celebration, tonal = true) {
+            InfoCard(stringResource(R.string.party_intro_title), R.drawable.ic_groups, tonal = true) {
                 BodyText(stringResource(R.string.party_intro_body))
             }
         }
 
         item { SectionHeader(stringResource(R.string.party_select_title)) }
-        val jblSpeakers = state.speakers.filter { it.isJbl }
-        if (jblSpeakers.isEmpty()) {
+        if (state.devices.isEmpty()) {
             item { BodyText(stringResource(R.string.party_select_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         } else {
             item {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    jblSpeakers.forEach { speaker ->
+                    state.devices.forEach { device ->
                         FilterChip(
-                            selected = speaker.inParty,
-                            onClick = { actions.setInParty(speaker.address, !speaker.inParty) },
-                            label = { Text(speaker.name) },
-                            leadingIcon = if (speaker.inParty) {
-                                { AppIcon(R.drawable.ic_check_circle, modifier = Modifier.size(18.dp)) }
-                            } else {
-                                null
+                            selected = device.selected,
+                            onClick = { actions.setSelected(device.address, !device.selected) },
+                            label = { Text(device.name) },
+                            leadingIcon = {
+                                AppIcon(
+                                    if (device.selected) R.drawable.ic_check_circle else device.kind.iconRes(),
+                                    modifier = Modifier.size(18.dp),
+                                )
                             },
                         )
                     }
@@ -85,7 +90,25 @@ fun PartyScreen(state: UiState, actions: PartyActions, contentPadding: PaddingVa
             }
         }
 
-        if (plan.mixesFamilies) {
+        // What the phone can do itself, with any Bluetooth audio devices (headphones included).
+        item { SectionHeader(stringResource(R.string.together_phone_title)) }
+        if (state.selected.size < 2) {
+            item { BodyText(stringResource(R.string.together_select_two), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        items(state.phoneOptions, key = { "phone-" + it.name }) { option ->
+            PhoneOptionCard(option, actions)
+        }
+
+        // Speakers that link up among themselves; JBL speakers get a guided plan.
+        item {
+            SectionHeader(stringResource(R.string.together_speakers_title))
+            BodyText(stringResource(R.string.together_speakers_body))
+        }
+        if (showJblPlan && (plan.groups.isNotEmpty() || plan.excluded.isNotEmpty())) {
+            item { BodyText(stringResource(R.string.party_jbl_body), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+
+        if (showJblPlan && plan.mixesFamilies) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AppIcon(R.drawable.ic_warning, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
@@ -99,7 +122,7 @@ fun PartyScreen(state: UiState, actions: PartyActions, contentPadding: PaddingVa
             GroupCard(group, state, actions)
         }
 
-        if (plan.excluded.isNotEmpty()) {
+        if (showJblPlan && plan.excluded.isNotEmpty()) {
             item { SectionHeader(stringResource(R.string.party_excluded_title)) }
             items(plan.excluded, key = { "excluded-" + it.speaker.key }) { excluded ->
                 Card(Modifier.fillMaxWidth()) {
@@ -114,21 +137,32 @@ fun PartyScreen(state: UiState, actions: PartyActions, contentPadding: PaddingVa
                 }
             }
         }
+    }
+}
 
-        if (plan.alternatives.isNotEmpty()) {
-            item { SectionHeader(stringResource(R.string.alternatives_title)) }
-            items(plan.alternatives, key = { "alt-" + it.name }) { alternative ->
-                AlternativeCard(alternative, actions)
-            }
+@Composable
+private fun PhoneOptionCard(option: PhoneOption, actions: TogetherActions) {
+    when (option) {
+        PhoneOption.DUAL_AUDIO -> InfoCard(stringResource(R.string.alt_samsung_title), R.drawable.ic_devices) {
+            BodyText(stringResource(R.string.alt_samsung_body))
+            OutlinedButton(onClick = actions.openOutputSwitcher) { Text(stringResource(R.string.action_open_output_switcher)) }
+        }
+        PhoneOption.AUDIO_SHARING -> InfoCard(stringResource(R.string.alt_le_title), R.drawable.ic_campaign) {
+            BodyText(stringResource(R.string.alt_le_body))
+            OutlinedButton(onClick = actions.openAudioSharing) { Text(stringResource(R.string.action_open_audio_sharing)) }
+        }
+        PhoneOption.ONE_AT_A_TIME -> InfoCard(stringResource(R.string.alt_switch_title), R.drawable.ic_swap_horiz) {
+            BodyText(stringResource(R.string.alt_switch_body))
+            OutlinedButton(onClick = actions.openOutputSwitcher) { Text(stringResource(R.string.action_open_output_switcher)) }
         }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GroupCard(group: LinkGroup, state: UiState, actions: PartyActions) {
+private fun GroupCard(group: LinkGroup, state: UiState, actions: TogetherActions) {
     val family = stringResource(group.family.labelRes())
-    val hostConnected = state.speakers.firstOrNull { it.address == group.host.key }?.connected == true
+    val hostConnected = state.devices.firstOrNull { it.address == group.host.key }?.connected == true
     Card(
         modifier = Modifier.fillMaxWidth().testTag("group_card"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -187,24 +221,6 @@ private fun GroupCard(group: LinkGroup, state: UiState, actions: PartyActions) {
                 }
             }
             Text(stringResource(R.string.party_test_sound_hint), style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun AlternativeCard(alternative: Alternative, actions: PartyActions) {
-    when (alternative) {
-        Alternative.SAMSUNG_DUAL_AUDIO -> InfoCard(stringResource(R.string.alt_samsung_title), R.drawable.ic_devices) {
-            BodyText(stringResource(R.string.alt_samsung_body))
-            OutlinedButton(onClick = actions.openOutputSwitcher) { Text(stringResource(R.string.action_open_output_switcher)) }
-        }
-        Alternative.LE_AUDIO_SHARING -> InfoCard(stringResource(R.string.alt_le_title), R.drawable.ic_campaign) {
-            BodyText(stringResource(R.string.alt_le_body))
-            OutlinedButton(onClick = actions.openAudioSharing) { Text(stringResource(R.string.action_open_audio_sharing)) }
-        }
-        Alternative.SWITCH_OUTPUT -> InfoCard(stringResource(R.string.alt_switch_title), R.drawable.ic_swap_horiz) {
-            BodyText(stringResource(R.string.alt_switch_body))
-            OutlinedButton(onClick = actions.openOutputSwitcher) { Text(stringResource(R.string.action_open_output_switcher)) }
         }
     }
 }
