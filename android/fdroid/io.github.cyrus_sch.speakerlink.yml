@@ -1,0 +1,29 @@
+Categories:
+  - Connectivity
+  - Multimedia
+License: GPL-3.0-or-later
+AuthorName: Cyrus-Sch
+SourceCode: https://github.com/Cyrus-Sch/SpeakerLink
+IssueTracker: https://github.com/Cyrus-Sch/SpeakerLink/issues
+Changelog: https://github.com/Cyrus-Sch/SpeakerLink/releases
+
+AutoName: SpeakerLink
+
+RepoType: git
+Repo: https://github.com/Cyrus-Sch/SpeakerLink.git
+Binaries: https://github.com/Cyrus-Sch/SpeakerLink/releases/download/android-v%v/SpeakerLink-%v.apk
+
+Builds:
+  - versionName: 1.0.0
+    versionCode: 1
+    commit: REPLACE_WITH_FULL_COMMIT_HASH_OF_TAG_android-v1.0.0
+    subdir: android/app
+    gradle:
+      - yes
+
+AllowedAPKSigningKeys: REPLACE_WITH_LOWERCASE_SHA256_CERTIFICATE_FINGERPRINT
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^android-v\d+\.\d+\.\d+$
+CurrentVersion: 1.0.0
+CurrentVersionCode: 1

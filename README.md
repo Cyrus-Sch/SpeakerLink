@@ -43,7 +43,7 @@ music on several speakers are:
 The Xtreme 4 joins both PartyBoost and Auracast groups (one at a time), and the Charge 3 links
 with JBL Connect speakers on its original firmware and with Connect+ after its update. Go 3, Clip 4 and older
 Go/Clip models cannot link. The catalog lives in
-[`core/src/main/kotlin/.../ModelCatalog.kt`](core/src/main/kotlin/io/github/cyrus_sch/speakerlink/core/ModelCatalog.kt).
+[`android/core/src/main/kotlin/.../ModelCatalog.kt`](android/core/src/main/kotlin/io/github/cyrus_sch/speakerlink/core/ModelCatalog.kt).
 
 ## Permissions
 
@@ -54,7 +54,7 @@ Go/Clip models cannot link. The catalog lives in
 
 Connecting a speaker and choosing the playing speaker call `BluetoothA2dp.connect`,
 `disconnect`, `setActiveDevice` and `getActiveDevice` through reflection
-([`HiddenBluetooth.kt`](app/src/main/java/io/github/cyrus_sch/speakerlink/bluetooth/HiddenBluetooth.kt)).
+([`HiddenBluetooth.kt`](android/app/src/main/java/io/github/cyrus_sch/speakerlink/bluetooth/HiddenBluetooth.kt)).
 They are not in the public SDK, but they sit on Android's non-SDK "unsupported" list (allowed for
 apps) on Android 12 to 17, and the Bluetooth service checks only `BLUETOOTH_CONNECT`. If a device
 blocks them, the app falls back to the system Bluetooth screens.
@@ -64,7 +64,7 @@ blocks them, the app falls back to the system Bluetooth screens.
 Requirements: JDK 17 or newer (CI and F-Droid use JDK 21) and the Android SDK with platform 37.
 
 ```sh
-cd SpeakerLink
+cd android
 ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
@@ -75,10 +75,10 @@ cd SpeakerLink
 Toolchain: Android Gradle Plugin 9.3.3 (built-in Kotlin), Gradle 9.7.1, Kotlin 2.4.21,
 Compose BOM 2026.09.00, compileSdk 37, targetSdk 36, minSdk 26.
 
-Continuous integration (`.github/workflows/speakerlink-android.yml`) builds, runs unit tests and
-lint, checks that two release builds are byte-for-byte identical, runs instrumented tests on an
+Continuous integration (`.github/workflows/android.yml`) builds, runs unit tests and lint,
+checks that two release builds are byte-for-byte identical, runs instrumented tests on an
 emulator (which also produces the store screenshots), and publishes signed releases for
-`speakerlink-v*` tags. See [PUBLISHING.md](PUBLISHING.md).
+`android-v*` tags. See [PUBLISHING.md](PUBLISHING.md).
 
 ## Sources
 

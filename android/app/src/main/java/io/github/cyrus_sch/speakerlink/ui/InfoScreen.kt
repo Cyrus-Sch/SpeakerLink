@@ -18,7 +18,7 @@ import io.github.cyrus_sch.speakerlink.R
 import io.github.cyrus_sch.speakerlink.core.LinkFamily
 import io.github.cyrus_sch.speakerlink.core.ModelCatalog
 
-const val SOURCE_URL = "https://github.com/Cyrus-Sch/PuzzleGenerator/tree/master/SpeakerLink"
+const val SOURCE_URL = "https://github.com/Cyrus-Sch/SpeakerLink"
 
 class InfoActions(
     val openDeveloperOptions: () -> Unit,

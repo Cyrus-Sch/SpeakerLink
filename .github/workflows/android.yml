@@ -1,0 +1,234 @@
+name: Android
+
+on:
+  push:
+    # Listing tags without branches would silently disable branch pushes.
+    branches:
+      - "**"
+    tags:
+      - "android-v*"
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+defaults:
+  run:
+    # "bash" (unlike the implicit default) adds -o pipefail.
+    shell: bash
+    working-directory: android
+
+jobs:
+  build:
+    name: Build, test and lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Unit tests, lint, debug and release builds
+        run: >
+          ./gradlew --stacktrace
+          :core:test
+          :app:testDebugUnitTest
+          :app:lintDebug
+          :app:assembleDebug
+          :app:assembleRelease
+          :app:assembleDebugAndroidTest
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: speakerlink-apks
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/mapping/release/mapping.txt
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: speakerlink-reports
+          path: |
+            android/app/build/reports/
+            android/core/build/reports/
+            android/app/build/test-results/
+            android/core/build/test-results/
+
+      - name: Check that the release build is reproducible (second checkout, other path)
+        run: |
+          git worktree add "$RUNNER_TEMP/repro" HEAD
+          (cd "$RUNNER_TEMP/repro/android" && ./gradlew --stacktrace --no-build-cache --no-configuration-cache :app:assembleRelease)
+          sha256sum app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$RUNNER_TEMP/repro/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          cmp app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$RUNNER_TEMP/repro/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+
+  emulator:
+    name: Instrumented tests and screenshots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Enable KVM
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build test APKs
+        run: ./gradlew --stacktrace :app:assembleDebug :app:assembleDebugAndroidTest
+
+      - name: Run instrumented tests on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          working-directory: android
+          script: |
+            ./gradlew --stacktrace :app:connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+            adb pull /sdcard/Android/data/io.github.cyrus_sch.speakerlink/files/screenshots app/build/screenshots || true
+
+      - name: Print screenshots (base64) for the store listing
+        run: |
+          find app/build/screenshots app/build/outputs/connected_android_test_additional_output -name '*.png' 2>/dev/null \
+            | sort -u | while read -r f; do
+              echo "SCREENSHOT-BEGIN $(basename "$f")"
+              base64 -w 4000 "$f"
+              echo "SCREENSHOT-END"
+            done
+
+      - name: Upload screenshots and test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: speakerlink-emulator
+          path: |
+            android/app/build/screenshots/
+            android/app/build/outputs/connected_android_test_additional_output/
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+
+  release:
+    name: Signed release
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    needs: [build, emulator]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Check that the tag matches the app version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          NAME=$(grep -oE 'versionName = "[^"]+"' app/build.gradle.kts | cut -d'"' -f2)
+          CODE=$(grep -oE 'versionCode = [0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
+          if [ "$NAME" != "${TAG#android-v}" ]; then
+            echo "::error::Tag $TAG does not match versionName $NAME in app/build.gradle.kts"
+            exit 1
+          fi
+          if [ ! -s "app/fastlane/metadata/android/en-US/changelogs/$CODE.txt" ]; then
+            echo "::error::Missing changelog app/fastlane/metadata/android/en-US/changelogs/$CODE.txt"
+            exit 1
+          fi
+
+      - name: Restore the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SPEAKERLINK_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.SPEAKERLINK_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SPEAKERLINK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SPEAKERLINK_KEY_PASSWORD }}
+        run: |
+          for name in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The secret SPEAKERLINK_$name is not set (see PUBLISHING.md)."
+              exit 1
+            fi
+          done
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+
+      - name: Build the signed release APK
+        env:
+          SPEAKERLINK_KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          SPEAKERLINK_KEYSTORE_PASSWORD: ${{ secrets.SPEAKERLINK_KEYSTORE_PASSWORD }}
+          SPEAKERLINK_KEY_ALIAS: ${{ secrets.SPEAKERLINK_KEY_ALIAS }}
+          SPEAKERLINK_KEY_PASSWORD: ${{ secrets.SPEAKERLINK_KEY_PASSWORD }}
+        run: ./gradlew --stacktrace --no-build-cache :app:assembleRelease
+
+      - name: Put apksigner on the PATH
+        run: |
+          BUILD_TOOLS="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)"
+          test -x "${BUILD_TOOLS}apksigner"
+          echo "$BUILD_TOOLS" >> "$GITHUB_PATH"
+
+      - name: Check the signed APK against an independent unsigned build (what F-Droid verifies)
+        run: |
+          git worktree add "$RUNNER_TEMP/fdroid-check" HEAD
+          (cd "$RUNNER_TEMP/fdroid-check/android" && ./gradlew --stacktrace --no-build-cache --no-configuration-cache :app:assembleRelease)
+          pipx install apksigcopier
+          apksigcopier compare app/build/outputs/apk/release/app-release.apk \
+            --unsigned "$RUNNER_TEMP/fdroid-check/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+
+      - name: Verify the signature and publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#android-v}"
+          APK="SpeakerLink-$VERSION.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          cp app/build/outputs/mapping/release/mapping.txt "SpeakerLink-$VERSION-mapping.txt"
+          apksigner verify --verbose --print-certs "$APK" | tee signature.txt
+          sha256sum "$APK" > "$APK.sha256"
+          CODE=$(grep -oE 'versionCode = [0-9]+' app/build.gradle.kts | grep -oE '[0-9]+')
+          gh release create "$TAG" "$APK" "$APK.sha256" "SpeakerLink-$VERSION-mapping.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "SpeakerLink for Android $VERSION" \
+            --notes-file "app/fastlane/metadata/android/en-US/changelogs/$CODE.txt"
